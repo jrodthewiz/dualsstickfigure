@@ -1,0 +1,176 @@
+version: 2
+
+goal:
+  title: "Game Overhaul 2026"
+  slug: "game-overhaul-2026"
+  kind: open_ended
+  tranche: "Research, planning, baseline save, and first production-safety implementation tranche."
+  status: active
+
+rules:
+  pm_owns_state: true
+  one_active_task: true
+  max_write_workers: 1
+  no_implementation_without_worker_or_pm_task: true
+  no_completion_without_judge_or_pm_audit: true
+
+agents:
+  scout: installed
+  worker: installed
+  judge: installed
+
+active_task: T003
+
+tasks:
+  - id: T001
+    type: scout
+    assignee: PM
+    status: done
+    objective: "Map repo purpose, architecture, verification commands, health signals, and improvement candidates."
+    inputs:
+      - README.md
+      - package.json
+      - next.config.js
+      - app/page.tsx
+      - app/game
+      - app/components
+      - app/theme
+      - OPTIMIZATION_TODO.md
+      - "Official web, React, and Next.js documentation."
+    constraints:
+      - "Read-only."
+      - "Prefer concrete file-path evidence over generic advice."
+      - "Use primary technical sources."
+    expected_output:
+      - "Repo map."
+      - "Verification commands."
+      - "Ranked improvement candidates."
+      - "Candidate next tasks."
+    receipt:
+      result: done
+      summary: "Repo is a Next 15 / React 18 custom Canvas platformer. Core runtime is concentrated in app/page.tsx, with split modules for maps, AI, particles, caching, culling, multiplayer lobby, Ably helpers, theme tokens, and upload/API routes. Build passes, but production build skips type/lint validation and reports a Next viewport metadata warning; direct TypeScript check fails with existing errors in Button and AI state typing."
+      evidence:
+        - "package.json: Next 15.3.2, React 18.2, custom scripts."
+        - "app/page.tsx: 12964 lines; owns canvas loop, animation loading, rendering, HUD, debug UI, controls, multiplayer hooks."
+        - "app/game/platformCache.ts: cache manager exists but integration is incomplete."
+        - "app/game/viewportCulling.ts: culling utilities exist."
+        - "OPTIMIZATION_TODO.md: explicitly marks platform caching integration as pending."
+        - "npm.cmd run build: pass with viewport metadata warning."
+        - "npx.cmd tsc --noEmit: fail with 14 type errors."
+        - "docs/goals/game-overhaul-2026/notes/T001-repo-and-research-scout.md"
+  - id: T002
+    type: judge
+    assignee: PM
+    status: done
+    objective: "Choose the first safe implementation tranche by impact, confidence, reversibility, and verification strength."
+    inputs:
+      - "T001 receipt."
+      - "Baseline build and type-check outputs."
+    constraints:
+      - "Do not begin risky visual rewrites before the production safety gate is credible."
+      - "Keep the deployed setup intact."
+    expected_output:
+      - "Decision."
+      - "First Worker task."
+      - "Blocked or deferred tasks."
+    receipt:
+      result: done
+      decision: "Do production safety first: fix the Next viewport warning and direct TypeScript failures so later visual/performance work has a meaningful local gate. Then commit and push. Defer major HUD, menu, map, and platform-cache refactors until the safety gate is green."
+      next_allowed_task: T003
+      blocked_tasks:
+        - "T004"
+        - "T005"
+  - id: T003
+    type: worker
+    assignee: PM
+    status: active
+    objective: "Fix the first production-safety gate: Next viewport metadata warning and direct TypeScript failures."
+    allowed_files:
+      - "app/layout.tsx"
+      - "app/components/ui/Button.tsx"
+      - "app/game/ai/stateMachine.ts"
+      - "docs/goals/game-overhaul-2026/state.yaml"
+    verify:
+      - "npm.cmd run build"
+      - "npx.cmd tsc --noEmit"
+      - "git status --short --branch"
+    stop_if:
+      - "Need deployment credentials."
+      - "A fix requires changing gameplay behavior beyond type preservation."
+      - "Verification fails twice for unrelated reasons."
+    receipt: null
+  - id: T004
+    type: worker
+    assignee: PM
+    status: queued
+    objective: "Overhaul the visible shell: menu, HUD, pause/debug overlays, typography, broken mojibake strings, responsive containment, and visual hierarchy."
+    allowed_files:
+      - "app/page.tsx"
+      - "app/theme/css-vars.css"
+      - "app/theme/tokens.ts"
+      - "app/components/ui/Button.tsx"
+      - "app/components/ui/Dialog.tsx"
+      - "app/components/ui/Panel.tsx"
+      - "app/components/ui/PromptDialog.tsx"
+      - "app/components/multiplayer/MapSelectionScreen.tsx"
+      - "app/components/multiplayer/ReadyUpScreen.tsx"
+      - "app/components/multiplayer/LobbyView.tsx"
+      - "app/components/multiplayer/LobbyMenu.tsx"
+    verify:
+      - "npm.cmd run build"
+      - "npx.cmd tsc --noEmit"
+      - "Browser screenshot/playtest of menu and in-game HUD at desktop and mobile widths."
+    stop_if:
+      - "Visual changes require new external assets."
+      - "Multiplayer lobby flow becomes ambiguous."
+      - "HUD overlaps the playfield in verification."
+    receipt: null
+  - id: T005
+    type: worker
+    assignee: PM
+    status: queued
+    objective: "Integrate the platform caching and frame telemetry path without changing gameplay rules."
+    allowed_files:
+      - "app/page.tsx"
+      - "app/game/platformCache.ts"
+      - "app/game/viewportCulling.ts"
+      - "app/game/maps/suburbia.ts"
+      - "app/game/maps/metropolis.ts"
+      - "app/game/maps/rooftops.ts"
+    verify:
+      - "npm.cmd run build"
+      - "npx.cmd tsc --noEmit"
+      - "Browser playtest with frame/HUD inspection and no console runtime errors."
+    stop_if:
+      - "Caching changes alter collision, platform placement, or map boundaries."
+      - "Offscreen/bitmap fallback breaks a supported browser path."
+    receipt: null
+  - id: T006
+    type: pm
+    assignee: PM
+    status: queued
+    objective: "Run a completion audit against the prompt and current tranche evidence before marking any goal complete."
+    inputs:
+      - "All receipts."
+      - "Build/type/playtest outputs."
+      - "Git commit and push state."
+    constraints:
+      - "Treat uncertainty as incomplete."
+    expected_output:
+      - "Prompt-to-artifact checklist."
+      - "Evidence for each explicit requirement."
+      - "Missing or deferred requirements."
+    receipt: null
+
+checks:
+  dirty_fingerprint: "baseline clean before docs; empty baseline commit 3642c4b pushed to origin/main."
+  last_verification:
+    result: mixed
+    task: T001
+    commands:
+      - cmd: "npm.cmd run build"
+        status: pass
+        summary: "Compiled and generated pages. Warned that viewport is incorrectly configured inside metadata."
+      - cmd: "npx.cmd tsc --noEmit"
+        status: fail
+        summary: "14 existing type errors in app/components/ui/Button.tsx and app/game/ai/stateMachine.ts."
