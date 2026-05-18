@@ -60,11 +60,12 @@ export class PlatformCacheManager {
    * Generate a unique cache key for a platform based on its visual properties
    */
   generateCacheKey(platform: Platform, mapId: string): string {
-    // Use position-based seed for deterministic variation
-    const seed = Math.floor(platform.x / 10);
+    // Use the generation anchor when available so moving platforms reuse the same cached art.
+    const seedSource = typeof platform.baseX === 'number' ? platform.baseX : platform.x;
+    const seed = Math.floor(seedSource / 10);
     
     // Key includes all properties that affect visual appearance
-    return `${mapId}_w${platform.width}_h${platform.height}_s${platform.buildingStyle || 0}_k${platform.kind || 'normal'}_seed${seed}`;
+    return `${mapId}_w${platform.width}_h${platform.height}_s${platform.buildingStyle || 0}_k${platform.kind || 'normal'}_f${platform.featureType || 'none'}_seed${seed}`;
   }
   
   /**

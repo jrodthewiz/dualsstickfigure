@@ -368,6 +368,7 @@ type SynthPreset = SynthLayer[];
 
 // ========== Stickman Animation System ==========
 type StickmanAnimDef = { path: string; frames: number; fps: number; loop: boolean };
+type StickmanFrameOverride = { animName?: string; framePad?: 0 | 2; soundFrames?: number[] };
 type StickmanClip = { images: (HTMLImageElement | ImageBitmap)[]; fps: number; loop: boolean };
 
 const STICKMAN_ANIMS: Record<string, StickmanAnimDef> = {
@@ -431,6 +432,41 @@ const STICKMAN_ANIMS: Record<string, StickmanAnimDef> = {
   // SWORD - Damage
   sword_hurt_center: { path: "/models/Stickfigure Player/1_Sword/hurt center", frames: 8, fps: 14, loop: false },
   sword_die: { path: "/models/Stickfigure Player/1_Sword/die A", frames: 16, fps: 14, loop: false },
+};
+
+const STICKMAN_FRAME_OVERRIDES: Record<string, StickmanFrameOverride> = {
+  unarmed_jab_single: { framePad: 0, soundFrames: [2] },
+  unarmed_jab_high_double: { soundFrames: [2, 7] },
+  unarmed_uppercut: { framePad: 0 },
+  unarmed_kick_high: { soundFrames: [4] },
+  unarmed_kick_low: { soundFrames: [4] },
+  unarmed_reverse_kick: { soundFrames: [8] },
+  unarmed_hurt: { framePad: 0 },
+  pistol_idle_fight: { animName: 'idle active fight pose' },
+  pistol_run_stop: { soundFrames: [3] },
+  pistol_jump: { framePad: 0 },
+  pistol_shoot: { framePad: 0 },
+  pistol_hurt_center: { framePad: 0 },
+  sword_run_stop: { soundFrames: [3] },
+  sword_jump: { framePad: 0 },
+  sword_slash: { soundFrames: [5] },
+  sword_block_center: { framePad: 0 },
+  sword_block_top: { framePad: 0 },
+  sword_block_bottom: { framePad: 0 },
+  sword_hurt_center: { framePad: 0 },
+};
+
+const getStickmanFrameUrl = (key: string, def: StickmanAnimDef, frameIndex: number): string => {
+  const override = STICKMAN_FRAME_OVERRIDES[key];
+  const isPistol = def.path.includes('2_Pistol');
+  const isSword = def.path.includes('1_Sword');
+  const baseName = isPistol ? 'stickman fighter-black-3_Pistol-' : isSword ? 'stickman fighter-black-2_Sword-' : 'stickman fighter-black-1_-';
+  const animName = override?.animName ?? def.path.split('/').pop() ?? '';
+  const framePad = override?.framePad ?? 2;
+  const frameId = framePad === 2 ? frameIndex.toString().padStart(2, '0') : frameIndex.toString();
+  const soundSuffix = override?.soundFrames?.includes(frameIndex) ? '_play_sound' : '';
+
+  return `${def.path}/${baseName}${animName}_${frameId}${soundSuffix}.png`.replace(/ /g, '%20');
 };
 
 const globalClips = {
@@ -1581,28 +1617,12 @@ const BULLET_IMPACT_PROFILES: Record<string, BulletImpactProfile> = {
       (ctx as any).mozImageSmoothingEnabled = false;
       (ctx as any).msImageSmoothingEnabled = false;
 
-      // Load stickman animations - ULTRA FAST
+      // Load stickman animations from deterministic asset URLs.
       const loadAnimations = async () => {
         const t0 = performance.now();
-        console.log('[Platformer] 🚀 Speed-loading animations...');
+        console.log('[Platformer] Loading animations...');
         const useBitmap = 'createImageBitmap' in window;
 
-        // Pattern cache: once we find working pattern for an anim, use it for all frames
-        const patternCache: Record<string, (i: number) => string> = {};
-
-        const buildPatterns = (folder: string, animName: string, i: number) => {
-          const isPistol = folder.includes('2_Pistol');
-          const isSword = folder.includes('1_Sword');
-          const baseName = isPistol ? 'stickman fighter-black-3_Pistol-' : isSword ? 'stickman fighter-black-2_Sword-' : 'stickman fighter-black-1_-';
-          // URL-encode paths to handle spaces (needed for web deployment)
-          return [
-            `${folder}/${baseName}${animName}_${i.toString().padStart(2, '0')}.png`.replace(/ /g, '%20'),
-            `${folder}/${baseName}${animName}_${i}.png`.replace(/ /g, '%20'),
-            `${folder}/${baseName}${animName}_${i}_play_sound.png`.replace(/ /g, '%20'),
-          ];
-        };
-
-        // Ultra-fast loader
         const fastLoad = async (url: string) => {
           if (useBitmap) {
             const r = await fetch(url, { cache: 'force-cache' });
@@ -1617,28 +1637,20 @@ const BULLET_IMPACT_PROFILES: Record<string, BulletImpactProfile> = {
           return img;
         };
 
-        // Find working pattern (race all patterns in parallel)
-        const discoverPattern = async (folder: string, animName: string): Promise<(i: number) => string> => {
-          const patterns = buildPatterns(folder, animName, 0);
-          try {
-            const winner = await Promise.race(
-              patterns.map(async (url) => {
-                await fastLoad(url);
-                return url;
-              })
-            );
-            // Convert winner to template function
-            return (i: number) => winner.replace('_0.png', `_${i}.png`).replace('_00.png', `_${i.toString().padStart(2, '0')}.png`);
-          } catch (err) {
-            console.warn(`[Animation] Could not find frame 0 for ${animName} in ${folder}, patterns tried:`, patterns);
-            // Return first pattern as fallback
-            return (i: number) => patterns[0].replace('_0.png', `_${i}.png`).replace('_00.png', `_${i.toString().padStart(2, '0')}.png`);
-          }
-        };
-
         const animKeys = Object.keys(STICKMAN_ANIMS);
         const framesByAnim: Record<string, (HTMLImageElement | ImageBitmap)[]> = {};
         for (const key of animKeys) framesByAnim[key] = [];
+        const loadFrame = async (key: string, def: StickmanAnimDef, frameIndex: number): Promise<boolean> => {
+          const url = getStickmanFrameUrl(key, def, frameIndex);
+          try {
+            framesByAnim[key][frameIndex] = await fastLoad(url);
+            return true;
+          } catch (err) {
+            console.warn(`[Animation] Missing frame ${key}[${frameIndex}] at ${url}`, err);
+            return false;
+          }
+        };
+
         // CRITICAL animations (must load before game starts)
         const critical = ['unarmed_idle', 'unarmed_walk', 'unarmed_run', 'unarmed_jump', 'pistol_idle', 'pistol_shoot', 'pistol_walk', 'pistol_run', 'pistol_run_shoot'];
         
@@ -1649,33 +1661,15 @@ const BULLET_IMPACT_PROFILES: Record<string, BulletImpactProfile> = {
         await Promise.all(critical.map(async (key) => {
           const def = STICKMAN_ANIMS[key];
           if (!def) return;
-          const folder = def.path.replace(/ /g, '%20'); // URL-encode folder path for web deployment
-          const animName = def.path.split('/').pop() || ''; // Get animation name from original path
-          
-          // Discover pattern with frame 0
-          patternCache[key] = await discoverPattern(folder, animName);
-          
-          // Load all frames in parallel (100 at a time)
-          const loadFrame = async (i: number) => {
-            try {
-              framesByAnim[key][i] = await fastLoad(patternCache[key](i));
-            } catch {
-              // Fallback: try all patterns
-              const patterns = buildPatterns(folder, animName, i);
-              for (const url of patterns) {
-                try {
-                  framesByAnim[key][i] = await fastLoad(url);
-                  break;
-                } catch {}
-              }
-            }
+          const loadCriticalFrame = async (i: number) => {
+            await loadFrame(key, def, i);
             phase1Done++;
           };
           
           // Load 100 frames in parallel
           for (let batch = 0; batch < def.frames; batch += 100) {
             await Promise.all(
-              Array.from({ length: Math.min(100, def.frames - batch) }, (_, i) => loadFrame(batch + i))
+              Array.from({ length: Math.min(100, def.frames - batch) }, (_, i) => loadCriticalFrame(batch + i))
             );
           }
         }));
@@ -1691,7 +1685,7 @@ const BULLET_IMPACT_PROFILES: Record<string, BulletImpactProfile> = {
         }
         globalClips.ready = true;
         const elapsed = ((performance.now() - t0) / 1000).toFixed(1);
-        console.log(`[Platformer] ✅ Game ready! (${phase1Done} critical frames in ${elapsed}s)`);
+        console.log(`[Platformer] Game ready! (${phase1Done}/${phase1Total} critical frames in ${elapsed}s)`);
         // PHASE 2: Background load remaining animations (non-blocking)
         const remaining = animKeys.filter(k => !critical.includes(k) && STICKMAN_ANIMS[k]);
         if (remaining.length > 0) {
@@ -1702,20 +1696,8 @@ const BULLET_IMPACT_PROFILES: Record<string, BulletImpactProfile> = {
             let bgDone = 0;
             await Promise.all(remaining.map(async (key) => {
               const def = STICKMAN_ANIMS[key];
-              const folder = def.path.replace(/ /g, '%20'); // URL-encode folder path for web deployment
-              const animName = def.path.split('/').pop() || ''; // Get animation name from original path
-              
-              patternCache[key] = await discoverPattern(folder, animName).catch(() => (i: number) => buildPatterns(folder, animName, i)[0]);
-              
               await Promise.all(Array.from({ length: def.frames }, async (_, i) => {
-                try {
-                  framesByAnim[key][i] = await fastLoad(patternCache[key](i));
-                } catch {
-                  const patterns = buildPatterns(folder, animName, i);
-                  for (const url of patterns) {
-                    try { framesByAnim[key][i] = await fastLoad(url); break; } catch {}
-                  }
-                }
+                await loadFrame(key, def, i);
                 bgDone++;
                 if (bgDone % 100 === 0) console.log(`[Platformer] Background: ${bgDone}/${bgTotal}`);
               }));
@@ -1724,7 +1706,7 @@ const BULLET_IMPACT_PROFILES: Record<string, BulletImpactProfile> = {
             }));
             
             const totalTime = ((performance.now() - t0) / 1000).toFixed(1);
-            console.log(`[Platformer] ✅ All animations loaded! (${totalTime}s total)`);
+            console.log(`[Platformer] All animations loaded! (${totalTime}s total)`);
           }, 100);
         }
       };
@@ -2542,11 +2524,10 @@ const BULLET_IMPACT_PROFILES: Record<string, BulletImpactProfile> = {
     const platformGrid = new SpatialHashGrid<Platform>(300);
     
     // ===== PERFORMANCE: Platform ImageBitmap Caching System =====
-    // NOTE: Platform caching provides 30-50% FPS gain but requires refactoring drawPlatforms()
-    // To implement: Extract platform rendering to separate function, render to offscreen canvas,
-    // cache as ImageBitmap, then draw cached bitmap. See platformCache.ts for utilities.
-    // TODO: Refactor drawPlatforms() to use PlatformCacheManager
-    const platformCacheManager = new PlatformCacheManager(200);
+    const platformCacheManager = new PlatformCacheManager(240);
+    const clearPlatformRenderCache = () => {
+      platformCacheManager.clear();
+    };
     
     const enemies: Enemy[] = [];
     const pickups: { type: 'medkit' | 'shield' | 'overdrive' | 'ammo' | 'coin'; x: number; y: number; value?: number }[] = [];
@@ -3442,6 +3423,7 @@ const BULLET_IMPACT_PROFILES: Record<string, BulletImpactProfile> = {
       if (currentMap.id !== platformCacheMapId) {
         platformChunkCache.clear();
         chunkPlatformMap.clear();
+        clearPlatformRenderCache();
         platforms.length = 0;
         platformCacheMapId = currentMap.id;
       }
@@ -5366,6 +5348,54 @@ const BULLET_IMPACT_PROFILES: Record<string, BulletImpactProfile> = {
     const enablePerformanceLogging = false;
     let frameCount = 0;
     let lastPerfLog = 0;
+    let telemetryWindowStart = performance.now();
+    let telemetryFrameCount = 0;
+    let telemetryFrameMsTotal = 0;
+    let visiblePlatformDrawCount = 0;
+    const frameTelemetry = {
+      frame: 0,
+      fps: 0,
+      avgFrameMs: 0,
+      lastFrameMs: 0,
+      maxFrameMs: 0,
+      updateMs: 0,
+      renderMs: 0,
+      visiblePlatforms: 0,
+      platformCache: platformCacheManager.getStats(),
+    };
+    (window as any).__platformerFrameTelemetry = frameTelemetry;
+
+    const updateFrameTelemetry = (frameStart: number, updateMs: number, renderMs: number) => {
+      const frameEnd = performance.now();
+      const frameMs = frameEnd - frameStart;
+      frameCount++;
+      telemetryFrameCount++;
+      telemetryFrameMsTotal += frameMs;
+
+      frameTelemetry.frame = frameCount;
+      frameTelemetry.lastFrameMs = frameMs;
+      frameTelemetry.maxFrameMs = Math.max(frameTelemetry.maxFrameMs, frameMs);
+      frameTelemetry.updateMs = updateMs;
+      frameTelemetry.renderMs = renderMs;
+      frameTelemetry.visiblePlatforms = visiblePlatformDrawCount;
+
+      if (frameEnd - telemetryWindowStart >= 1000) {
+        frameTelemetry.fps = (telemetryFrameCount * 1000) / (frameEnd - telemetryWindowStart);
+        frameTelemetry.avgFrameMs = telemetryFrameMsTotal / Math.max(1, telemetryFrameCount);
+        frameTelemetry.platformCache = platformCacheManager.getStats();
+        (window as any).__platformerFrameTelemetry = frameTelemetry;
+
+        if (enablePerformanceLogging && frameEnd - lastPerfLog >= 3000) {
+          console.log('[PERF] Frame telemetry', { ...frameTelemetry });
+          lastPerfLog = frameEnd;
+        }
+
+        telemetryWindowStart = frameEnd;
+        telemetryFrameCount = 0;
+        telemetryFrameMsTotal = 0;
+        frameTelemetry.maxFrameMs = 0;
+      }
+    };
 
     const step = () => {
       if (stats) stats.begin();
@@ -5391,7 +5421,9 @@ const BULLET_IMPACT_PROFILES: Record<string, BulletImpactProfile> = {
         return;
       }
 
+      const updateStart = performance.now();
       update(dt);
+      const updateMs = performance.now() - updateStart;
       
       // Throttled network sync (20-30fps instead of 60fps)
       if (multiplayerStateRef.current.isMultiplayerGame && now - lastNetworkSync >= NETWORK_SYNC_INTERVAL) {
@@ -5399,7 +5431,10 @@ const BULLET_IMPACT_PROFILES: Record<string, BulletImpactProfile> = {
         lastNetworkSync = now;
       }
       
+      const renderStart = performance.now();
       render();
+      const renderMs = performance.now() - renderStart;
+      updateFrameTelemetry(now, updateMs, renderMs);
       if (stats) stats.end();
       rafId = requestAnimationFrame(step);
     };
@@ -9234,6 +9269,7 @@ const BULLET_IMPACT_PROFILES: Record<string, BulletImpactProfile> = {
       const top = camera.y - 200;
       const bottom = camera.y + canvas.clientHeight + 200;
       const currentMap = currentMapRef.current;
+      visiblePlatformDrawCount = 0;
       
       // For rooftop map, DON'T draw any platforms - buildings are drawn separately
       if (currentMap.id === 'rooftop-sunset') {
@@ -9242,6 +9278,7 @@ const BULLET_IMPACT_PROFILES: Record<string, BulletImpactProfile> = {
       
       for (const p of platforms) {
         if (p.x + p.width < left || p.x > right || p.y + p.height < top || p.y > bottom) continue;
+        visiblePlatformDrawCount++;
         
         // Round all coordinates to prevent subpixel rendering glitches
         const px = Math.round(p.x);
@@ -11054,6 +11091,7 @@ const BULLET_IMPACT_PROFILES: Record<string, BulletImpactProfile> = {
             platformCacheMapId = selectedMap.id;
             platformChunkCache.clear();
             chunkPlatformMap.clear();
+            clearPlatformRenderCache();
             platforms.length = 0;
           }
         }
@@ -11205,6 +11243,7 @@ const BULLET_IMPACT_PROFILES: Record<string, BulletImpactProfile> = {
       platforms.length = 0;
       platformChunkCache.clear();
       chunkPlatformMap.clear();
+      clearPlatformRenderCache();
       platformCacheMapId = currentMapRef.current.id;
       shockwaves.length = 0;
       railBeams.length = 0;

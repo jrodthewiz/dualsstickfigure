@@ -19,7 +19,7 @@ agents:
   worker: installed
   judge: installed
 
-active_task: T005
+active_task: T006
 
 tasks:
   - id: T001
@@ -159,7 +159,7 @@ tasks:
   - id: T005
     type: worker
     assignee: PM
-    status: active
+    status: done
     objective: "Integrate the platform caching/frame telemetry path and remove animation-loader 404 probing without changing gameplay rules."
     allowed_files:
       - "app/page.tsx"
@@ -175,11 +175,29 @@ tasks:
     stop_if:
       - "Caching changes alter collision, platform placement, or map boundaries."
       - "Offscreen/bitmap fallback breaks a supported browser path."
-    receipt: null
+    receipt:
+      result: done
+      changed_files:
+        - "app/page.tsx"
+        - "app/game/platformCache.ts"
+      commands:
+        - cmd: "npx.cmd tsc --noEmit"
+          status: pass
+          summary: "Direct TypeScript check passes after deterministic animation loading and telemetry changes."
+        - cmd: "npm.cmd run build"
+          status: pass
+          summary: "Production build passes after the performance slice."
+        - cmd: "Browser playtest on http://localhost:3003"
+          status: pass
+          summary: "Loaded Suburbia match with a bot. Animation phase 1 loaded 135/135 critical frames, phase 2 loaded 431 background frames in 1.9s total, and there were no console warnings or errors after game start."
+        - cmd: "window.__platformerFrameTelemetry inspection"
+          status: pass
+          summary: "Telemetry exposed frame/update/render timing, visible platform count, and platform cache stats; Suburbia run showed about 60 FPS, 6 visible platforms, cache size 9, 4184 hits, 9 misses, and 0.997 hit rate."
+      summary: "Replaced speculative animation URL probing with deterministic per-animation frame URLs, stabilized platform cache keys for moving platforms, cleared cached platform art on map/reset changes, and exposed lightweight frame telemetry for browser performance inspection."
   - id: T006
     type: pm
     assignee: PM
-    status: queued
+    status: active
     objective: "Run a completion audit against the prompt and current tranche evidence before marking any goal complete."
     inputs:
       - "All receipts."
@@ -197,14 +215,14 @@ checks:
   dirty_fingerprint: "baseline clean before docs; empty baseline commit 3642c4b pushed to origin/main."
   last_verification:
     result: pass
-    task: T004
+    task: T005
     commands:
       - cmd: "npm.cmd run build"
         status: pass
-        summary: "Compiled and generated pages after visual shell pass."
+        summary: "Compiled and generated pages after deterministic animation loading and performance telemetry changes."
       - cmd: "npx.cmd tsc --noEmit"
         status: pass
         summary: "Direct TypeScript check passes."
-      - cmd: "Browser screenshots"
-        status: mixed
-        summary: "Desktop/mobile menu and in-game HUD render, but console still shows existing 404s from animation path probing."
+      - cmd: "Browser playtest"
+        status: pass
+        summary: "Suburbia bot match starts on http://localhost:3003 with animation phase 2 complete, no post-start console warnings/errors, and frame telemetry/cache stats exposed."
