@@ -1,0 +1,11 @@
+node_modules/
+.next/
+out/
+__out_tmp/
+.vercel/
+.vscode/
+
+.env
+.env*.local
+
+*.zip

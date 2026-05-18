@@ -1,0 +1,28 @@
+{
+  "name": "stickfigure-platformer",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "export": "next build",
+    "start": "next start"
+  },
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.913.0",
+    "@types/simple-peer": "^9.11.9",
+    "ably": "^2.14.0",
+    "next": "15.3.2",
+    "proton-engine": "^7.1.5",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "simple-peer": "^9.11.1",
+    "stats.js": "^0.17.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20",
+    "@types/react": "^18",
+    "@types/react-dom": "^18",
+    "typescript": "^5.6.3"
+  }
+}
