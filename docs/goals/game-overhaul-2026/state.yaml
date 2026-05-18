@@ -19,7 +19,7 @@ agents:
   worker: installed
   judge: installed
 
-active_task: T006
+active_task: T008
 
 tasks:
   - id: T001
@@ -197,7 +197,7 @@ tasks:
   - id: T006
     type: pm
     assignee: PM
-    status: active
+    status: done
     objective: "Run a completion audit against the prompt and current tranche evidence before marking any goal complete."
     inputs:
       - "All receipts."
@@ -209,20 +209,80 @@ tasks:
       - "Prompt-to-artifact checklist."
       - "Evidence for each explicit requirement."
       - "Missing or deferred requirements."
+    receipt:
+      result: incomplete
+      summary: "The current tranche has credible evidence for research, baseline save, incremental commits, production safety fixes, visual shell polish, deterministic animation loading, platform cache telemetry, green type/build checks, browser playtest, and pushed commits. The full goal should remain active because `next build` still skips TypeScript validation, the app still lacks an explicit favicon route, and default lobby/voice diagnostics are too noisy for production readiness."
+      evidence:
+        - "git log --oneline -5: baseline, docs, safety, visual, and performance commits are present and pushed."
+        - "git status --short --branch: clean and aligned with origin/main after T005 push."
+        - "T005 browser receipt: no post-start console warnings/errors and telemetry/cache stats are exposed."
+      next_allowed_task: T007
+  - id: T007
+    type: worker
+    assignee: PM
+    status: done
+    objective: "Finish production-readiness polish by making builds validate TypeScript, adding a favicon route, and gating noisy lobby/voice debug logs."
+    allowed_files:
+      - "next.config.js"
+      - "app/icon.svg"
+      - "app/context/GameContext.tsx"
+      - "app/components/voice/VoiceChat.tsx"
+      - "docs/goals/game-overhaul-2026/state.yaml"
+    verify:
+      - "npx.cmd tsc --noEmit"
+      - "npm.cmd run build"
+      - "Browser reload on a fresh dev server with no favicon 404 and reduced default console noise."
+    stop_if:
+      - "Next build validation fails for errors outside the edited scope."
+      - "Favicon handling requires binary asset tooling."
+      - "Debug-log gating hides warnings or errors needed for real failures."
+    receipt:
+      result: done
+      changed_files:
+        - "next.config.js"
+        - "app/icon.svg"
+        - "app/context/GameContext.tsx"
+        - "app/components/voice/VoiceChat.tsx"
+      commands:
+        - cmd: "npx.cmd tsc --noEmit"
+          status: pass
+          summary: "Direct TypeScript check passes after build-config and log-gating changes."
+        - cmd: "npm.cmd run build"
+          status: pass
+          summary: "Next build now runs 'Linting and checking validity of types' and passes; the previous explicit skip flags are gone."
+        - cmd: "Browser reload on http://localhost:3004"
+          status: pass
+          summary: "Fresh load reports zero warnings/errors, injects /icon.svg as the favicon, and suppresses routine lobby/voice debug logs unless platformerDebugLogs is set."
+      summary: "Made production builds validate TypeScript, added a Next app favicon route, and moved routine lobby/voice diagnostics behind an opt-in localStorage debug flag while leaving warnings and errors visible."
+  - id: T008
+    type: pm
+    assignee: PM
+    status: active
+    objective: "Run the final completion audit after production-readiness polish and decide whether the goal can be marked complete."
+    inputs:
+      - "All task receipts."
+      - "Latest build/type/browser evidence."
+      - "Latest git push state."
+    constraints:
+      - "Do not mark the goal complete if deployment, core gameplay, visual, performance, or setup evidence is missing."
+    expected_output:
+      - "Final prompt-to-artifact checklist."
+      - "Residual risks."
+      - "Completion decision."
     receipt: null
 
 checks:
   dirty_fingerprint: "baseline clean before docs; empty baseline commit 3642c4b pushed to origin/main."
   last_verification:
     result: pass
-    task: T005
+    task: T007
     commands:
       - cmd: "npm.cmd run build"
         status: pass
-        summary: "Compiled and generated pages after deterministic animation loading and performance telemetry changes."
+        summary: "Compiled, linted, and checked type validity after removing skipped validation flags."
       - cmd: "npx.cmd tsc --noEmit"
         status: pass
         summary: "Direct TypeScript check passes."
       - cmd: "Browser playtest"
         status: pass
-        summary: "Suburbia bot match starts on http://localhost:3003 with animation phase 2 complete, no post-start console warnings/errors, and frame telemetry/cache stats exposed."
+        summary: "Fresh browser reload on http://localhost:3004 has no warnings/errors, includes the icon route, and keeps routine lobby/voice logs quiet by default."

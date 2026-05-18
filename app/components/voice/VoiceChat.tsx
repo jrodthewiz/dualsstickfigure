@@ -11,8 +11,18 @@ interface VoiceChatProps {
   inGame?: boolean; // True when game has started (hides when inactive)
 }
 
+const debugLog = (...args: unknown[]) => {
+  try {
+    if (typeof window !== 'undefined' && window.localStorage.getItem('platformerDebugLogs') === '1') {
+      console.log(...args);
+    }
+  } catch {
+    // Ignore storage access failures; debug logs are optional.
+  }
+};
+
 export function VoiceChat({ channel, connectedPlayers, localClientId, inGame = false }: VoiceChatProps) {
-  console.log('[VoiceChat] Rendered - Channel:', !!channel, 'Players:', connectedPlayers.length, 'LocalID:', localClientId, 'InGame:', inGame);
+  debugLog('[VoiceChat] Rendered - Channel:', !!channel, 'Players:', connectedPlayers.length, 'LocalID:', localClientId, 'InGame:', inGame);
   
   const { isActive, isMuted, micError, remoteStreams, startVoice, stopVoice, toggleMute } = 
     useLobbyVoice({

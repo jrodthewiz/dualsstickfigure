@@ -23,6 +23,16 @@ interface GameContextType {
 
 const GameContext = createContext<GameContextType | null>(null);
 
+const debugLog = (...args: unknown[]) => {
+  try {
+    if (typeof window !== 'undefined' && window.localStorage.getItem('platformerDebugLogs') === '1') {
+      console.log(...args);
+    }
+  } catch {
+    // Ignore storage access failures; debug logs are optional.
+  }
+};
+
 export function useGameContext(): GameContextType {
   const context = useContext(GameContext);
   if (!context) {
@@ -70,7 +80,7 @@ export function GameProvider({ children }: GameProviderProps) {
     try {
       // Wait for connection
       if (ably.connection.state !== 'connected') {
-        console.log('Waiting for Ably connection...');
+        debugLog('Waiting for Ably connection...');
         await new Promise<void>((resolve) => {
           ably.connection.once('connected', () => resolve());
           // Timeout after 5 seconds
@@ -108,7 +118,7 @@ export function GameProvider({ children }: GameProviderProps) {
       // Subscribe to presence events
       channel.presence.subscribe('enter', (member: Ably.PresenceMessage) => {
         if (member.clientId !== clientId) {
-          console.log('Player joined:', member.clientId, member.data);
+          debugLog('Player joined:', member.clientId, member.data);
           const newPlayer: ConnectedPlayer = {
             clientId: member.clientId,
             username: (member.data as any)?.username || 'Unknown',
@@ -138,7 +148,7 @@ export function GameProvider({ children }: GameProviderProps) {
 
       channel.presence.subscribe('leave', (member: Ably.PresenceMessage) => {
         if (member.clientId !== clientId) {
-          console.log('Player left:', member.clientId);
+          debugLog('Player left:', member.clientId);
           setGameState(prev => ({
             ...prev,
             connectedPlayers: prev.connectedPlayers.filter(
@@ -175,7 +185,7 @@ export function GameProvider({ children }: GameProviderProps) {
       // Subscribe to player ready state changes
       safeChannelSubscribe(channel, 'playerReady', (message: any) => {
         if (message.data?.clientId !== undefined) {
-          console.log('Host received ready state change:', message.data.clientId, message.data.isReady);
+          debugLog('Host received ready state change:', message.data.clientId, message.data.isReady);
           setGameState(prev => ({
             ...prev,
             connectedPlayers: prev.connectedPlayers.map(p =>
@@ -187,7 +197,7 @@ export function GameProvider({ children }: GameProviderProps) {
         }
       });
 
-      console.log('✅ Lobby created:', sessionId);
+      debugLog('Lobby created:', sessionId);
       return sessionId;
     } catch (error) {
       console.error('Failed to create lobby:', error);
@@ -207,7 +217,7 @@ export function GameProvider({ children }: GameProviderProps) {
     try {
       // Wait for connection
       if (ably.connection.state !== 'connected') {
-        console.log('Waiting for Ably connection...');
+        debugLog('Waiting for Ably connection...');
         await new Promise<void>((resolve) => {
           ably.connection.once('connected', () => resolve());
           setTimeout(() => resolve(), 5000);
@@ -273,7 +283,7 @@ export function GameProvider({ children }: GameProviderProps) {
       // Subscribe to map selection changes
       safeChannelSubscribe(channel, 'mapSelected', (message: any) => {
         if (message.data?.mapId) {
-          console.log('Map selected:', message.data.mapId);
+          debugLog('Map selected:', message.data.mapId);
           setGameState(prev => ({
             ...prev,
             selectedMapId: message.data.mapId,
@@ -284,11 +294,11 @@ export function GameProvider({ children }: GameProviderProps) {
       // Subscribe to phase changes
       safeChannelSubscribe(channel, 'phaseChange', (message: any) => {
         if (message.data?.phase) {
-          console.log('Client received phase change:', message.data.phase, 'Map:', message.data.selectedMapId);
+          debugLog('Client received phase change:', message.data.phase, 'Map:', message.data.selectedMapId);
           
           // Show notification if host ended the match
           if (message.data.reason === 'host-ended-match' && message.data.phase === 'map-selection') {
-            console.log('🎮 Host ended the match - returning to map selection');
+            debugLog('Host ended the match - returning to map selection');
           }
           
           setGameState(prev => ({
@@ -305,7 +315,7 @@ export function GameProvider({ children }: GameProviderProps) {
       // Subscribe to player ready state changes
       safeChannelSubscribe(channel, 'playerReady', (message: any) => {
         if (message.data?.clientId !== undefined) {
-          console.log('Client received ready state change:', message.data.clientId, message.data.isReady);
+          debugLog('Client received ready state change:', message.data.clientId, message.data.isReady);
           setGameState(prev => ({
             ...prev,
             connectedPlayers: prev.connectedPlayers.map(p =>
@@ -319,7 +329,7 @@ export function GameProvider({ children }: GameProviderProps) {
 
       // Subscribe to presence leave
       channel.presence.subscribe('leave', (member: Ably.PresenceMessage) => {
-        console.log('Player left:', member.clientId);
+        debugLog('Player left:', member.clientId);
         
         setGameState(prev => {
           const updated = prev.connectedPlayers.filter(
@@ -336,7 +346,7 @@ export function GameProvider({ children }: GameProviderProps) {
         });
       });
 
-      console.log('✅ Joined lobby:', sessionId);
+      debugLog('Joined lobby:', sessionId);
       return true;
     } catch (error) {
       console.error('Failed to join lobby:', error);
@@ -416,7 +426,7 @@ export function GameProvider({ children }: GameProviderProps) {
         return prev;
       }
 
-      console.log('🎮 Host ending match - returning all players to map selection');
+      debugLog('Host ending match - returning all players to map selection');
       
       // Reset all player ready states for fresh map selection
       const resetPlayers = prev.connectedPlayers.map(p => ({ ...p, isReady: false }));
@@ -449,7 +459,7 @@ export function GameProvider({ children }: GameProviderProps) {
         return prev;
       }
 
-      console.log('Host selecting map:', mapId);
+      debugLog('Host selecting map:', mapId);
 
       // Broadcast map selection to all clients
       if (prev.ablyChannelRef) {
@@ -560,7 +570,7 @@ export function GameProvider({ children }: GameProviderProps) {
 
       const nextReady = !playerEntry.isReady;
 
-      console.log('Toggling ready state for', resolvedClientId, 'to', nextReady);
+      debugLog('Toggling ready state for', resolvedClientId, 'to', nextReady);
 
       if (prev.ablyChannelRef) {
         safeChannelPublish(prev.ablyChannelRef, 'playerReady', {
@@ -598,4 +608,3 @@ export function GameProvider({ children }: GameProviderProps) {
     </GameContext.Provider>
   );
 }
-
