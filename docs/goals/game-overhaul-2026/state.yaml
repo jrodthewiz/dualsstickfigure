@@ -19,7 +19,7 @@ agents:
   worker: installed
   judge: installed
 
-active_task: T004
+active_task: T005
 
 tasks:
   - id: T001
@@ -115,7 +115,7 @@ tasks:
   - id: T004
     type: worker
     assignee: PM
-    status: active
+    status: done
     objective: "Overhaul the visible shell: menu, HUD, pause/debug overlays, typography, broken mojibake strings, responsive containment, and visual hierarchy."
     allowed_files:
       - "app/page.tsx"
@@ -137,12 +137,30 @@ tasks:
       - "Visual changes require new external assets."
       - "Multiplayer lobby flow becomes ambiguous."
       - "HUD overlaps the playfield in verification."
-    receipt: null
+    receipt:
+      result: done
+      changed_files:
+        - "app/page.tsx"
+        - "app/theme/css-vars.css"
+      commands:
+        - cmd: "npx.cmd tsc --noEmit"
+          status: pass
+          summary: "Direct TypeScript check passes after the UI changes."
+        - cmd: "npm.cmd run build"
+          status: pass
+          summary: "Production build passes after the UI changes."
+        - cmd: "Browser desktop and mobile menu screenshots on http://localhost:3002"
+          status: pass
+          summary: "Menu title, layout, and controls render correctly at 1365x768 and 390x844 after moving CSS to global stylesheet."
+        - cmd: "Browser in-game HUD screenshot on http://localhost:3002"
+          status: mixed
+          summary: "Top combat HUD is clearer and bottom action HUD is smaller. Existing animation loader 404s remain visible in console and are assigned to T005."
+      summary: "Reworked the first-screen shell with a correct DOM title, stronger backdrop, responsive menu grid, shared global UI classes, cleaner button labels, corrected Mayhem metadata/footer text, and smaller persistent combat HUD constants."
   - id: T005
     type: worker
     assignee: PM
-    status: queued
-    objective: "Integrate the platform caching and frame telemetry path without changing gameplay rules."
+    status: active
+    objective: "Integrate the platform caching/frame telemetry path and remove animation-loader 404 probing without changing gameplay rules."
     allowed_files:
       - "app/page.tsx"
       - "app/game/platformCache.ts"
@@ -179,11 +197,14 @@ checks:
   dirty_fingerprint: "baseline clean before docs; empty baseline commit 3642c4b pushed to origin/main."
   last_verification:
     result: pass
-    task: T003
+    task: T004
     commands:
       - cmd: "npm.cmd run build"
         status: pass
-        summary: "Compiled and generated pages without the previous viewport warning."
+        summary: "Compiled and generated pages after visual shell pass."
       - cmd: "npx.cmd tsc --noEmit"
         status: pass
         summary: "Direct TypeScript check passes."
+      - cmd: "Browser screenshots"
+        status: mixed
+        summary: "Desktop/mobile menu and in-game HUD render, but console still shows existing 404s from animation path probing."

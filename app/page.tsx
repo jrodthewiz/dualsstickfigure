@@ -1130,9 +1130,9 @@ export default function PlatformerPage(): JSX.Element {
   const [isPaused, setIsPaused] = useState(false);
   const [showDebugPanel, setShowDebugPanel] = useState(false);
   const SHOW_TITLE_TUNING = false;
-  const [titleOffset, setTitleOffset] = useState(39);
-  const [titleYOffset, setTitleYOffset] = useState(-72);
-  const [contentLift, setContentLift] = useState(-90);
+  const [titleOffset, setTitleOffset] = useState(0);
+  const [titleYOffset, setTitleYOffset] = useState(0);
+  const [contentLift, setContentLift] = useState(0);
   const forceRerender = useState(0)[1];
   const hasShownIntro = useRef(false);
 
@@ -10350,8 +10350,8 @@ const BULLET_IMPACT_PROFILES: Record<string, BulletImpactProfile> = {
       // ========== MODERN WEAPON HUD REDESIGN ==========
       // Context-sensitive, minimal, AAA-style weapon display
 
-      const hudBottomPad = 24;
-      const hudGap = 10;
+      const hudBottomPad = 18;
+      const hudGap = 8;
 
       const modes: { key: string; type: 'unarmed' | 'pistol' | 'sword'; label: string; icon: string }[] = [
         { key: '1', type: 'unarmed', label: 'MELEE', icon: '👊' },
@@ -10359,19 +10359,19 @@ const BULLET_IMPACT_PROFILES: Record<string, BulletImpactProfile> = {
         { key: '3', type: 'sword', label: 'SWORD', icon: '⚔️' },
       ];
 
-      const bubbleHeight = 50;
-      const bubbleWidth = 138;
-      const bubbleGap = 18;
+      const bubbleHeight = 42;
+      const bubbleWidth = 120;
+      const bubbleGap = 10;
 
       const labelFontFamily = "'Rajdhani', ui-monospace";
       const keyFont = "700 11px 'Rajdhani', ui-monospace";
 
-      const meleeButtonSize = 68;
-      const meleePanelPadX = 32;
-      const meleePanelPadY = 42;
-      const meleeLabelHeight = 20;
-      const keyChipHeight = 18;
-      const keyChipGap = 8;
+      const meleeButtonSize = 52;
+      const meleePanelPadX = 20;
+      const meleePanelPadY = 34;
+      const meleeLabelHeight = 18;
+      const keyChipHeight = 16;
+      const keyChipGap = 6;
       const meleeActions: { key: string; label: string; icon: string; inputFlag: keyof typeof input }[] = [
         { key: 'Z', label: 'JAB', icon: '🥊', inputFlag: 'jab' },
         { key: 'X', label: 'HIGH', icon: '🦶', inputFlag: 'kickHigh' },
@@ -10384,8 +10384,8 @@ const BULLET_IMPACT_PROFILES: Record<string, BulletImpactProfile> = {
       const meleePanelWidth = actionsWidth + meleePanelPadX * 2;
       const meleePanelHeight = meleeButtonSize + meleePanelPadY + keyChipHeight + keyChipGap;
 
-      const weaponPanelWidth = 360;
-      const weaponPanelHeight = 150;
+      const weaponPanelWidth = 300;
+      const weaponPanelHeight = 116;
 
       const hasMeleePanel = player.animWeapon === 'unarmed' || player.animWeapon === 'sword';
       const hasWeaponPanel = player.animWeapon === 'pistol';
@@ -10395,7 +10395,7 @@ const BULLET_IMPACT_PROFILES: Record<string, BulletImpactProfile> = {
       const modeRowWidth = modes.length * bubbleWidth + (modes.length - 1) * bubbleGap;
       // Position everything from bottom edge up - touching the bottom
       const bottomPanelTopY = h - activeBottomPanelHeight;
-      const modeRowY = h - activeBottomPanelHeight - bubbleHeight - (activeBottomPanelHeight > 0 ? 12 : 20);
+      const modeRowY = h - activeBottomPanelHeight - bubbleHeight - (activeBottomPanelHeight > 0 ? 8 : 16);
       const modeRowX = centerX - modeRowWidth / 2;
 
       ctx.save();
@@ -11425,11 +11425,11 @@ const BULLET_IMPACT_PROFILES: Record<string, BulletImpactProfile> = {
     if (e.key === "Enter") handleStart();
   };
   return (
-    <div style={{ width: "100vw", height: "100vh", background: "#000", position: "relative" }}>
+    <div className="game-root" style={{ width: "100vw", height: "100vh", background: "#000", position: "relative" }}>
       <Head>
-        <title>JRod Presents: Stickfigure Mayham</title>
+        <title>JRod Presents: Stickfigure Mayhem</title>
         <meta name="description" content="An action-packed stickfigure platformer game." />
-        <meta name="keywords" content="JRod, Stickfigure, Mayham, platformer, game" />
+        <meta name="keywords" content="JRod, Stickfigure, Mayhem, platformer, game" />
         <meta name="author" content="JRod" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
         <link rel="icon" href="/favicon.ico" />
@@ -11645,6 +11645,7 @@ const BULLET_IMPACT_PROFILES: Record<string, BulletImpactProfile> = {
             pointer-events: none;
             z-index: 1000;
           }
+
           /* Custom range slider styling */
           input[type="range"] {
             -webkit-appearance: none;
@@ -11869,6 +11870,7 @@ const BULLET_IMPACT_PROFILES: Record<string, BulletImpactProfile> = {
 
       {!gameStarted && (!gameContext.gameState.lobbyPhase || gameContext.gameState.lobbyPhase === 'waiting') && (
         <div
+          className="main-menu-screen"
           style={{
             position: "absolute",
             top: 0,
@@ -11879,7 +11881,7 @@ const BULLET_IMPACT_PROFILES: Record<string, BulletImpactProfile> = {
             alignItems: "center",
             justifyContent: "center",
             pointerEvents: "auto",
-            background: 'var(--grad-surface)'
+            background: 'radial-gradient(circle at 50% 12%, rgba(255,255,255,0.94), rgba(210,221,221,0.88) 28%, rgba(78,84,86,0.92) 58%, rgba(8,10,12,0.98) 100%)'
           }}
         >
           {/* Windows desktop pattern */}
@@ -11890,15 +11892,17 @@ const BULLET_IMPACT_PROFILES: Record<string, BulletImpactProfile> = {
             backgroundImage: 'repeating-linear-gradient(45deg, transparent, transparent 2px, rgba(0,0,0,0.1) 2px, rgba(0,0,0,0.1) 4px)',
             pointerEvents: 'none'
           }} />
-          <div style={{ 
-            width: '90vw', 
-            maxWidth: 700, 
-            display: 'grid', 
-            gap: 'clamp(6px, 1.2vh, 12px)', 
-            position: 'relative', 
-            zIndex: 1,
-            margin: 'auto'
-          }} className="menu-fade-in">
+          <div
+            className="main-menu-shell menu-fade-in"
+            style={{
+              width: 'min(94vw, 980px)',
+              display: 'grid',
+              gap: 'clamp(10px, 2vh, 18px)',
+              position: 'relative',
+              zIndex: 1,
+              margin: 'auto'
+            }}
+          >
             {/* Title image */}
             <div className="menu-slide-top" style={{ 
               position: 'relative',
@@ -11909,15 +11913,18 @@ const BULLET_IMPACT_PROFILES: Record<string, BulletImpactProfile> = {
               gap: 12,
               marginBottom: `${contentLift}px`
             }}>
-              <img
-                src="/images/StickFigureMayhem%20HUD.png"
-                alt="Stickfigure Mayham Title"
+              <div
+                className="game-title-plaque"
+                aria-label="Stickfigure Mayhem"
                 style={{
-                  maxWidth: '100%',
                   transform: `translate(${titleOffset}px, ${titleYOffset}px)`,
-                  filter: 'grayscale(100%) drop-shadow(0 0 30px rgba(255, 255, 255, 0.5))'
                 }}
-              />
+              >
+                <div>
+                  <div className="game-title-kicker">JRod Presents:</div>
+                  <div className="game-title-main">STICKFIGURE<br />MAYHEM</div>
+                </div>
+              </div>
               {SHOW_TITLE_TUNING && (
               <div style={{ 
                   display: 'flex',
@@ -11966,7 +11973,7 @@ const BULLET_IMPACT_PROFILES: Record<string, BulletImpactProfile> = {
               )}
             </div>
             {/* Menu cards */}
-            <div className="menu-slide-bottom" style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 2fr) minmax(0, 1fr)', gap: 'clamp(10px, 2vw, 20px)', transform: `translateY(${contentLift}px)` }}>
+            <div className="main-menu-grid menu-slide-bottom" style={{ transform: `translateY(${contentLift}px)` }}>
               {/* Player & Start */}
               <div style={{ 
                 background: 'var(--grad-surface)', 
@@ -12388,7 +12395,7 @@ const BULLET_IMPACT_PROFILES: Record<string, BulletImpactProfile> = {
               textShadow: '1px 1px 0 rgba(0,0,0,0.8)'
             }}>
               <div style={{ opacity: 0.6 }}>
-                © 2025 JRod • STICKFIGURE MAYHAM
+                © 2025 JRod • STICKFIGURE MAYHEM
               </div>
             </div>
           </div>
@@ -12401,27 +12408,29 @@ const BULLET_IMPACT_PROFILES: Record<string, BulletImpactProfile> = {
           <div className="scanline-overlay" />
           
           {/* Top HUD */}
-          <div style={{ 
+          <div className="hud-layer" style={{ 
             position: 'absolute', 
             top: 0, 
             left: 0, 
             right: 0, 
             fontFamily: 'Press Start 2P',
             pointerEvents: 'none',
-            padding: '16px 20px'
+            padding: '16px 20px',
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'flex-start',
+            gap: 16
           }}>
             {/* Wave, Score & Kills - Top Left */}
-            <div style={{ 
-              position: 'absolute',
-              top: 20,
-              left: 20,
+            <div className="hud-score-cluster hud-panel" style={{ 
               fontFamily: "'Rajdhani', 'Share Tech Mono', ui-monospace",
               display: 'flex', 
-              gap: 24
+              gap: 24,
+              padding: '10px 14px'
             }}>
               {/* Wave */}
               <div>
-                <div style={{
+                <div className="hud-metric-label" style={{
                   fontSize: 12,
                   color: '#c0c0c0',
                   fontWeight: 800,
@@ -12431,7 +12440,7 @@ const BULLET_IMPACT_PROFILES: Record<string, BulletImpactProfile> = {
                 }}>
                   WAVE
                 </div>
-                <div style={{
+                <div className="hud-metric-value" style={{
                   fontSize: 36,
                   fontWeight: 900,
                   color: '#ffffff',
@@ -12445,7 +12454,7 @@ const BULLET_IMPACT_PROFILES: Record<string, BulletImpactProfile> = {
 
               {/* Score */}
               <div>
-                  <div style={{ 
+                  <div className="hud-metric-label" style={{ 
                   fontSize: 12,
                   color: '#c0c0c0',
                   fontWeight: 800,
@@ -12455,7 +12464,7 @@ const BULLET_IMPACT_PROFILES: Record<string, BulletImpactProfile> = {
                 }}>
                   SCORE
                 </div>
-                <div style={{
+                <div className="hud-metric-value" style={{
                   fontSize: 36,
                   fontWeight: 900,
                   color: '#ffffff',
@@ -12469,7 +12478,7 @@ const BULLET_IMPACT_PROFILES: Record<string, BulletImpactProfile> = {
 
               {/* Kills */}
               <div>
-                <div style={{
+                <div className="hud-metric-label" style={{
                   fontSize: 12,
                   color: '#c0c0c0',
                   fontWeight: 800,
@@ -12479,7 +12488,7 @@ const BULLET_IMPACT_PROFILES: Record<string, BulletImpactProfile> = {
                 }}>
                   KILLS
                 </div>
-                <div style={{
+                <div className="hud-metric-value" style={{
                   fontSize: 36,
                   fontWeight: 900,
                   color: '#ffffff',
@@ -12493,10 +12502,7 @@ const BULLET_IMPACT_PROFILES: Record<string, BulletImpactProfile> = {
             </div>
 
             {/* Player Stats - Top Right */}
-            <div style={{
-              position: 'absolute',
-              top: 20,
-              right: 20,
+            <div className="hud-player-cluster hud-panel" style={{
               display: 'flex', 
               flexDirection: 'column',
               gap: 12,
@@ -12645,7 +12651,7 @@ const BULLET_IMPACT_PROFILES: Record<string, BulletImpactProfile> = {
           }}>
             <button 
               onClick={() => { const c: any = canvasRef.current; if (c && c._togglePause) c._togglePause(); }} 
-              className="matrix-button pixel" 
+              className="matrix-button pixel hud-action-button" 
               style={{ 
                 background: 'rgba(0,0,0,0.75)', 
                 backdropFilter: 'blur(4px)',
@@ -12672,7 +12678,7 @@ const BULLET_IMPACT_PROFILES: Record<string, BulletImpactProfile> = {
                 e.currentTarget.style.borderColor = 'rgba(200,200,200,0.6)';
                 e.currentTarget.style.boxShadow = '0 0 15px rgba(255,255,255,0.2), 0 4px 15px rgba(0,0,0,0.5)';
               }}>
-              {isPaused ? '▶ RESUME' : '❚❚ PAUSE'}
+              {isPaused ? 'RESUME' : 'PAUSE'}
           </button>
           </div>
 
@@ -12685,7 +12691,7 @@ const BULLET_IMPACT_PROFILES: Record<string, BulletImpactProfile> = {
           }}>
             <button 
               onClick={() => setShowDebugPanel(!showDebugPanel)} 
-              className="matrix-button pixel" 
+              className="matrix-button pixel hud-action-button" 
               style={{ 
                 background: 'rgba(0,0,0,0.75)', 
                 backdropFilter: 'blur(4px)',
@@ -12712,7 +12718,7 @@ const BULLET_IMPACT_PROFILES: Record<string, BulletImpactProfile> = {
                 e.currentTarget.style.borderColor = 'rgba(200,200,200,0.6)';
                 e.currentTarget.style.boxShadow = '0 0 15px rgba(255,255,255,0.2), 0 4px 15px rgba(0,0,0,0.5)';
               }}>
-              {showDebugPanel ? '✕ DEBUG' : '⚙ DEBUG'}
+              {showDebugPanel ? 'CLOSE DEBUG' : 'DEBUG'}
             </button>
           </div>
           {/* Debug Panel */}
@@ -13023,7 +13029,7 @@ const BULLET_IMPACT_PROFILES: Record<string, BulletImpactProfile> = {
                     e.currentTarget.style.boxShadow = '0 0 20px rgba(0,255,0,0.5)';
                   }}
                 >
-                  💾 SAVE
+                  SAVE
                 </button>
                 
                 <button
@@ -13052,7 +13058,7 @@ const BULLET_IMPACT_PROFILES: Record<string, BulletImpactProfile> = {
                     e.currentTarget.style.boxShadow = '0 0 20px rgba(255,170,0,0.5)';
                   }}
                 >
-                  🔄 RELOAD
+                  RELOAD
                 </button>
               </div>
               
@@ -13125,7 +13131,7 @@ const BULLET_IMPACT_PROFILES: Record<string, BulletImpactProfile> = {
                 justifyContent: 'space-between'
               }}
             >
-              <span>⚙ Key Bindings</span>
+              <span>Key Bindings</span>
               <button
                 onClick={() => {
                   if (!listeningForKey) {
@@ -13146,7 +13152,7 @@ const BULLET_IMPACT_PROFILES: Record<string, BulletImpactProfile> = {
                   transition: 'none'
                 }}
               >
-                ✕
+                  Close
               </button>
             </div>
             
@@ -13350,7 +13356,7 @@ const BULLET_IMPACT_PROFILES: Record<string, BulletImpactProfile> = {
                                   boxShadow: 'var(--shadow-raised)'
                                 }}
                               >
-                                ✕
+                            Close
                               </button>
                             )}
                           </div>
@@ -13395,7 +13401,7 @@ const BULLET_IMPACT_PROFILES: Record<string, BulletImpactProfile> = {
                   boxShadow: 'var(--shadow-raised)'
                 }}
               >
-                🔄 Reset to Defaults
+                    Reset to Defaults
               </button>
             </div>
             </div>
