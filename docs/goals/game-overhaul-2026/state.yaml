@@ -4,8 +4,8 @@ goal:
   title: "Game Overhaul 2026"
   slug: "game-overhaul-2026"
   kind: open_ended
-  tranche: "Research, planning, baseline save, and first production-safety implementation tranche."
-  status: active
+  tranche: "Research, baseline save, production safety, visual shell overhaul, performance telemetry/cache integration, and production-readiness polish."
+  status: complete
 
 rules:
   pm_owns_state: true
@@ -19,7 +19,7 @@ agents:
   worker: installed
   judge: installed
 
-active_task: T008
+active_task: null
 
 tasks:
   - id: T001
@@ -257,7 +257,7 @@ tasks:
   - id: T008
     type: pm
     assignee: PM
-    status: active
+    status: done
     objective: "Run the final completion audit after production-readiness polish and decide whether the goal can be marked complete."
     inputs:
       - "All task receipts."
@@ -269,13 +269,41 @@ tasks:
       - "Final prompt-to-artifact checklist."
       - "Residual risks."
       - "Completion decision."
-    receipt: null
+    receipt:
+      result: complete
+      decision: "Mark the goal complete."
+      checklist:
+        - requirement: "Save a baseline before overhaul work."
+          status: pass
+          evidence: "Empty baseline commit 3642c4b was pushed before implementation changes."
+        - requirement: "Use a researched high-level plan."
+          status: pass
+          evidence: "T001 research note cites official MDN, web.dev, React, Next.js, and Chrome DevTools sources and maps repo-specific candidates."
+        - requirement: "Keep the existing Next.js setup easy to build and deploy."
+          status: pass
+          evidence: "next.config.js no longer skips validation; npm.cmd run build passes with type validity checking and existing routes intact."
+        - requirement: "Improve visual polish and game shell readiness."
+          status: pass
+          evidence: "T004 reworked the menu, title, HUD hierarchy, responsive shell, and broken visible labels; browser desktop/mobile checks passed."
+        - requirement: "Improve performance and game readiness."
+          status: pass
+          evidence: "T005 removed speculative animation 404 probing, loaded all 566 animation frames deterministically, exposed frame telemetry, and showed a Suburbia platform cache hit rate near 0.998 during playtest."
+        - requirement: "Commit and push along the way."
+          status: pass
+          evidence: "Pushed commits 3642c4b, 1a32bc3, 1ba9451, d01441e, 956fb48, and c4e694a to origin/main."
+        - requirement: "Final browser/setup sanity."
+          status: pass
+          evidence: "Fresh http://localhost:3004 reload had zero warnings/errors, injected /icon.svg, and kept routine lobby/voice debug logs quiet by default."
+      residual_risks:
+        - "Live deployment status was not independently verified because no deployment provider credentials or dashboard access were used; origin/main has been pushed for the existing deployment path."
+        - "The main runtime remains concentrated in app/page.tsx, so future large features should be split carefully behind additional playtests."
+      summary: "The requested overhaul is handled within the current repo and deployment workflow: researched plan, baseline, incremental pushed commits, stronger production checks, more polished UI shell, deterministic asset loading, platform cache telemetry, and clean local browser verification."
 
 checks:
   dirty_fingerprint: "baseline clean before docs; empty baseline commit 3642c4b pushed to origin/main."
   last_verification:
     result: pass
-    task: T007
+    task: T008
     commands:
       - cmd: "npm.cmd run build"
         status: pass
@@ -286,3 +314,6 @@ checks:
       - cmd: "Browser playtest"
         status: pass
         summary: "Fresh browser reload on http://localhost:3004 has no warnings/errors, includes the icon route, and keeps routine lobby/voice logs quiet by default."
+      - cmd: "git status --short --branch"
+        status: pass
+        summary: "main is clean and aligned with origin/main after c4e694a push."
