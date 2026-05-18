@@ -19,7 +19,7 @@ agents:
   worker: installed
   judge: installed
 
-active_task: T003
+active_task: T004
 
 tasks:
   - id: T001
@@ -83,7 +83,7 @@ tasks:
   - id: T003
     type: worker
     assignee: PM
-    status: active
+    status: done
     objective: "Fix the first production-safety gate: Next viewport metadata warning and direct TypeScript failures."
     allowed_files:
       - "app/layout.tsx"
@@ -98,11 +98,24 @@ tasks:
       - "Need deployment credentials."
       - "A fix requires changing gameplay behavior beyond type preservation."
       - "Verification fails twice for unrelated reasons."
-    receipt: null
+    receipt:
+      result: done
+      changed_files:
+        - "app/layout.tsx"
+        - "app/components/ui/Button.tsx"
+        - "app/game/ai/stateMachine.ts"
+      commands:
+        - cmd: "npx.cmd tsc --noEmit"
+          status: pass
+          summary: "Direct TypeScript check now passes."
+        - cmd: "npm.cmd run build"
+          status: pass
+          summary: "Production build passes and the previous viewport metadata warning is gone."
+      summary: "Moved viewport config to the supported Next.js `viewport` export, made UI Button DOM style restoration string-safe, and narrowed AI move directions only at decision boundaries to preserve existing Character aiData compatibility."
   - id: T004
     type: worker
     assignee: PM
-    status: queued
+    status: active
     objective: "Overhaul the visible shell: menu, HUD, pause/debug overlays, typography, broken mojibake strings, responsive containment, and visual hierarchy."
     allowed_files:
       - "app/page.tsx"
@@ -165,12 +178,12 @@ tasks:
 checks:
   dirty_fingerprint: "baseline clean before docs; empty baseline commit 3642c4b pushed to origin/main."
   last_verification:
-    result: mixed
-    task: T001
+    result: pass
+    task: T003
     commands:
       - cmd: "npm.cmd run build"
         status: pass
-        summary: "Compiled and generated pages. Warned that viewport is incorrectly configured inside metadata."
+        summary: "Compiled and generated pages without the previous viewport warning."
       - cmd: "npx.cmd tsc --noEmit"
-        status: fail
-        summary: "14 existing type errors in app/components/ui/Button.tsx and app/game/ai/stateMachine.ts."
+        status: pass
+        summary: "Direct TypeScript check passes."

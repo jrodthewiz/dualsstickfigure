@@ -2,6 +2,7 @@
 
 export type EnemyStateId = 'neutral' | 'approach' | 'pressure' | 'spacing' | 'combo' | 'retreat' | 'engage';
 export type EnemyAttackName = 'jab' | 'kickHigh' | 'kickLow' | 'reverseKick' | 'uppercut' | 'saltoKick' | 'jabHighDouble';
+type Direction = -1 | 0 | 1;
 
 export interface EnemyProfileConfig {
   preferredRange: number;
@@ -65,7 +66,7 @@ export interface EnemyAIData {
 
 export interface EnemyDecision {
   state: EnemyStateId;
-  moveDir: -1 | 0 | 1;
+  moveDir: Direction;
   run: boolean;
   jump: boolean;
   shootHeld: boolean;
@@ -97,6 +98,18 @@ const clampTimer = (value: number, deltaMs: number): number => Math.max(0, value
 
 const randomBetween = (rand: () => number, min: number, max: number): number => min + rand() * (max - min);
 
+const randomDirection = (random: () => number): Direction => (random() < 0.5 ? -1 : 1);
+
+const toDirection = (value: number | undefined, fallback: Direction = 0): Direction => {
+  if (value === undefined || value === 0) return fallback;
+  return value < 0 ? -1 : 1;
+};
+
+const oppositeDirection = (direction: Direction): Direction => {
+  if (direction === 0) return 0;
+  return direction < 0 ? 1 : -1;
+};
+
 export function ensureEnemyAIData(enemy: EnemyAgentSnapshot, random: () => number): EnemyAIData {
   if (!enemy.aiData) {
     enemy.aiData = {
@@ -106,8 +119,8 @@ export function ensureEnemyAIData(enemy: EnemyAgentSnapshot, random: () => numbe
       decisionCooldown: 0,
       moveTimer: 0,
       comboStep: 0,
-      strafeDir: enemy.strafeDir ?? (random() < 0.5 ? -1 : 1),
-      lastPlayerDir: random() < 0.5 ? -1 : 1,
+      strafeDir: toDirection(enemy.strafeDir, randomDirection(random)),
+      lastPlayerDir: randomDirection(random),
       stuckTimer: 0,
     };
   }
@@ -120,10 +133,10 @@ export function ensureEnemyAIData(enemy: EnemyAgentSnapshot, random: () => numbe
   }
 
   if (ai.strafeDir === undefined || ai.strafeDir === 0) {
-    ai.strafeDir = enemy.strafeDir ?? (random() < 0.5 ? -1 : 1);
+    ai.strafeDir = toDirection(enemy.strafeDir, randomDirection(random));
   }
   if (ai.lastPlayerDir === undefined || ai.lastPlayerDir === 0) {
-    ai.lastPlayerDir = random() < 0.5 ? -1 : 1;
+    ai.lastPlayerDir = randomDirection(random);
   }
 
   return ai;
@@ -206,7 +219,7 @@ export function stepEnemyStateMachine(params: EnemyStateMachineParams): EnemyDec
     if (debug.length < 6) debug.push(line);
   };
 
-  const dirX = Math.sign(dx) || ai.lastPlayerDir || 1;
+  const dirX = toDirection(Math.sign(dx), toDirection(ai.lastPlayerDir, 1));
   ai.lastPlayerDir = dirX;
 
   const meleeRange = Math.max(80, profile.meleeRange); // Melee attack distance (increased)
@@ -326,10 +339,10 @@ export function stepEnemyStateMachine(params: EnemyStateMachineParams): EnemyDec
       if (slightlyClose) {
         // Maintain a short buffer by circling / sidestepping
         if ((ai.strafePhaseMs ?? 0) <= 0) {
-          ai.strafeDir = -ai.strafeDir;
+          ai.strafeDir = oppositeDirection(toDirection(ai.strafeDir, randomDirection(random)));
           ai.strafePhaseMs = 320 + randomBetween(random, -80, 80);
         }
-        decision.moveDir = ai.strafeDir;
+        decision.moveDir = toDirection(ai.strafeDir);
         decision.run = false;
         pushDebug('melee strafe');
       } else {
@@ -361,15 +374,15 @@ export function stepEnemyStateMachine(params: EnemyStateMachineParams): EnemyDec
       decision.weapon = 'unarmed';
 
       if (tooClose) {
-        decision.moveDir = -dirX;
+        decision.moveDir = oppositeDirection(dirX);
         decision.run = false;
         pushDebug('pressure reset');
       } else {
         if ((ai.strafePhaseMs ?? 0) <= 0) {
-          ai.strafeDir = -ai.strafeDir;
+          ai.strafeDir = oppositeDirection(toDirection(ai.strafeDir, randomDirection(random)));
           ai.strafePhaseMs = 260 + randomBetween(random, -60, 60);
         }
-        decision.moveDir = ai.strafeDir;
+        decision.moveDir = toDirection(ai.strafeDir);
         decision.run = false;
         pushDebug('pressure strafe');
       }
@@ -394,15 +407,15 @@ export function stepEnemyStateMachine(params: EnemyStateMachineParams): EnemyDec
         pushDebug('spacing advance');
       } else if (withinSpacingBand) {
         if ((ai.strafePhaseMs ?? 0) <= 0) {
-          ai.strafeDir = -ai.strafeDir;
+          ai.strafeDir = oppositeDirection(toDirection(ai.strafeDir, randomDirection(random)));
           ai.strafePhaseMs = 240 + randomBetween(random, -70, 70);
         }
-        decision.moveDir = ai.strafeDir;
+        decision.moveDir = toDirection(ai.strafeDir);
         decision.run = false;
         pushDebug('spacing strafe');
       } else {
         // Slightly too close - step back gently
-        decision.moveDir = -dirX;
+        decision.moveDir = oppositeDirection(dirX);
         decision.run = false;
         pushDebug('spacing retreat');
       }
@@ -469,7 +482,7 @@ export function stepEnemyStateMachine(params: EnemyStateMachineParams): EnemyDec
     case 'retreat': {
       // Only used when critically low on health
       decision.weapon = 'pistol';
-      decision.moveDir = -dirX;
+      decision.moveDir = oppositeDirection(dirX);
       decision.run = true;
       
       // Shoot while retreating

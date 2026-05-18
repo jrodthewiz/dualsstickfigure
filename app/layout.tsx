@@ -1,13 +1,12 @@
+import type { Viewport } from 'next';
 import { AblyContextProvider } from './context/AblyContext';
 import { GameProvider } from './context/GameContext';
 import { ThemeProvider } from './context/ThemeProvider';
 import './theme/css-vars.css';
 
-export const metadata = {
-  viewport: {
-    width: 'device-width',
-    initialScale: 1,
-  },
+export const viewport: Viewport = {
+  width: 'device-width',
+  initialScale: 1,
 };
 
 export default function RootLayout({

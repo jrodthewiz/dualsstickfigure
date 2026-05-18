@@ -7,6 +7,11 @@ type ButtonProps = React.ButtonHTMLAttributes<HTMLButtonElement> & {
   fullWidth?: boolean;
 };
 
+type ButtonVariant = NonNullable<ButtonProps["variant"]>;
+
+const toCssValue = (value: React.CSSProperties[keyof React.CSSProperties]): string =>
+  value == null ? "" : String(value);
+
 export function Button({ variant = "default", fullWidth, style, ...props }: ButtonProps) {
   const base: React.CSSProperties = {
     padding: "8px 16px",
@@ -25,7 +30,7 @@ export function Button({ variant = "default", fullWidth, style, ...props }: Butt
     textShadow: "none",
   };
 
-  const variants: Record<string, React.CSSProperties> = {
+  const variants: Record<ButtonVariant, React.CSSProperties> = {
     default: {},
     accent: {
       background: "var(--grad-titlebar)",
@@ -77,7 +82,7 @@ export function Button({ variant = "default", fullWidth, style, ...props }: Butt
       }}
       onMouseLeave={(e) => {
         if (!props.disabled) {
-          e.currentTarget.style.background = variants[variant]?.background || base.background;
+          e.currentTarget.style.background = toCssValue(variants[variant].background ?? base.background);
         }
       }}
       onMouseDown={(e) => {
@@ -87,8 +92,8 @@ export function Button({ variant = "default", fullWidth, style, ...props }: Butt
       }}
       onMouseUp={(e) => {
         if (!props.disabled) {
-          e.currentTarget.style.boxShadow = variants[variant]?.boxShadow || base.boxShadow;
-          e.currentTarget.style.background = variants[variant]?.background || base.background;
+          e.currentTarget.style.boxShadow = toCssValue(variants[variant].boxShadow ?? base.boxShadow);
+          e.currentTarget.style.background = toCssValue(variants[variant].background ?? base.background);
         }
       }}
     />
