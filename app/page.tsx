@@ -34,7 +34,7 @@ import * as CollisionUtils from "./game/collisionUtils";
 import type { AttackHitbox as ImportedAttackHitbox, CollisionSettings, DebugSettings } from "./game/collisionUtils";
 import { SpatialHashGrid } from "./game/spatialHash";
 import { isInViewport } from "./game/viewportCulling";
-import { PlatformCacheManager, createOffscreenCanvas, canvasToImageBitmap } from "./game/platformCache";
+import { PlatformCacheManager, createOffscreenCanvas } from "./game/platformCache";
 
 // ========== Perlin Noise (1D) ==========
 class Perlin1D {
@@ -470,10 +470,7 @@ const getStickmanFrameUrl = (key: string, def: StickmanAnimDef, frameIndex: numb
   return gameImagePath(`${def.path}/${baseName}${animName}_${frameId}${soundSuffix}.png`.replace(/ /g, '%20'));
 };
 
-const globalClips = {
-  clips: {} as Record<string, StickmanClip>,
-  ready: false,
-};
+const globalClips = { clips: {} as Record<string, StickmanClip & { frames: number }> };
 
 const STICKMAN_BOUNDS = { width: 1242, height: 1087, centerX: 481, bottom: 913, visibleHeight: 509 };
 const DEFAULT_PLAYER_RADIUS = 22;
@@ -984,10 +981,6 @@ export default function PlatformerPage(): JSX.Element {
     imageMaxWidth: '90%', // How wide the fight image can be
     imageMaxHeight: '70%', // How tall the fight image can be
     
-    // Visual styling
-    backdropBlur: 8, // Blur amount for map behind (px)
-    backdropBrightness: 0.3, // Brightness of map behind (0 = black, 1 = normal)
-    filmGrainOpacity: 0.05, // Subtle film grain effect (0 = none, 0.1 = heavy)
   };
   // =================================================================
 
@@ -998,13 +991,15 @@ export default function PlatformerPage(): JSX.Element {
   // Multiplayer hooks
   const gameContext = useGameContext();
   const roomClient = useRoomClient();
-  const [remotePlayers, setRemotePlayers] = useState<Map<string, RemotePlayer>>(new Map());
   const lastSyncTime = useRef(0);
   const localPlayerId = useRef<string>('');
   
   // Refs to access latest multiplayer state from canvas closure
   const multiplayerStateRef = useRef(gameContext.gameState);
-  const remotePlayersRef = useRef(remotePlayers);
+  const remotePlayersRef = useRef(new Map<string, RemotePlayer>());
+  const updateRemotePlayers = useCallback((update: (previous: Map<string, RemotePlayer>) => Map<string, RemotePlayer>) => {
+    remotePlayersRef.current = update(remotePlayersRef.current);
+  }, []);
   
   // Keep refs updated
   useEffect(() => {
@@ -1012,8 +1007,8 @@ export default function PlatformerPage(): JSX.Element {
   }, [gameContext.gameState]);
   
   useEffect(() => {
-    remotePlayersRef.current = remotePlayers;
-  }, [remotePlayers]);
+    remotePlayersRef.current.clear();
+  }, [gameContext.gameState.roomChannel]);
 
   // Set local player ID from room transport
   useEffect(() => {
@@ -1034,7 +1029,7 @@ export default function PlatformerPage(): JSX.Element {
       // Ignore own sync messages (we're authoritative for local player)
       if (id === localPlayerId.current) return;
       
-      setRemotePlayers(prev => {
+      updateRemotePlayers(prev => {
         const updated = new Map(prev);
         const existing = updated.get(id);
         
@@ -1113,7 +1108,7 @@ export default function PlatformerPage(): JSX.Element {
       // Update health bars for spectators (not attacker, they already updated locally)
       // Skip if we're the attacker (we already applied the damage immediately at frame crossing)
       if (attackerId !== localPlayerId.current) {
-        setRemotePlayers(prev => {
+        updateRemotePlayers(prev => {
           const updated = new Map(prev);
           const victim = updated.get(victimId);
           if (victim) {
@@ -1582,7 +1577,7 @@ const BULLET_IMPACT_PROFILES: Record<string, BulletImpactProfile> = {
       const protonCanvas = protonCanvasRef.current as HTMLCanvasElement | null;
       if (!canvas) return;
       if (!protonCanvas) return;
-      const ctx = canvas.getContext("2d") as CanvasRenderingContext2D | null;
+      const ctx = canvas.getContext("2d", { alpha: false }) as CanvasRenderingContext2D | null;
       if (!ctx) return;
       const protonCtx = protonCanvas.getContext("2d") as CanvasRenderingContext2D | null;
       if (!protonCtx) return;
@@ -1597,100 +1592,73 @@ const BULLET_IMPACT_PROFILES: Record<string, BulletImpactProfile> = {
       (ctx as any).mozImageSmoothingEnabled = false;
       (ctx as any).msImageSmoothingEnabled = false;
 
-      // Load stickman animations from deterministic asset URLs.
+      // Bound image work so loading every animation cannot monopolize the renderer.
+      let animationLoadingDisposed = false;
+      const spriteRequest = new AbortController();
+      const requestedClips = new Set<string>();
       const loadAnimations = async () => {
-        const t0 = performance.now();
-        console.log('[Platformer] Loading animations...');
-        const useBitmap = 'createImageBitmap' in window;
+        const keys = Object.keys(STICKMAN_ANIMS);
+        const critical = new Set(['unarmed_idle', 'unarmed_walk', 'unarmed_run', 'unarmed_jump',
+          'unarmed_jab', 'pistol_idle', 'pistol_shoot', 'pistol_walk', 'pistol_run', 'pistol_run_shoot']);
+        for (const key of keys) {
+          const def = STICKMAN_ANIMS[key];
+          globalClips.clips[key] ??= { images: [], fps: def.fps, loop: def.loop, frames: def.frames };
+        }
+        const packed = process.env.NEXT_PUBLIC_STICKFIGURE_PACKED_IMAGES === '1';
 
-        const fastLoad = async (url: string) => {
-          if (useBitmap) {
-            const r = await fetch(url, { cache: 'force-cache' });
-            if (!r.ok) {
-              throw new Error(`Failed to load ${url}: ${r.status}`);
+        const loadClip = async (key: string, stepMs: number) => {
+          const def = STICKMAN_ANIMS[key];
+          if (globalClips.clips[key].images.length) return;
+          const images: (HTMLImageElement | ImageBitmap)[] = [];
+          for (let index = 0; index < def.frames && !animationLoadingDisposed; index++) {
+            if (stepMs) await new Promise(resolve => window.setTimeout(resolve, stepMs));
+            if (animationLoadingDisposed) break;
+            const url = getStickmanFrameUrl(key, def, index);
+            try {
+              if ('createImageBitmap' in window) {
+                const response = await fetch(url, { cache: 'force-cache', signal: spriteRequest.signal });
+                if (!response.ok) continue;
+                const blob = await response.blob();
+                const image = packed ? await createImageBitmap(blob) : await createImageBitmap(blob, {
+                  resizeWidth: 621, resizeHeight: 544, resizeQuality: 'high',
+                });
+                if (animationLoadingDisposed) image.close();
+                else images[index] = image;
+              } else {
+                const image = new Image();
+                image.src = url;
+                await image.decode();
+                images[index] = image;
+              }
+            } catch {
+              // Continue through a missing frame. The clip can use its other frames.
             }
-            return createImageBitmap(await r.blob());
           }
-          const img = new Image();
-          img.src = url;
-          await img.decode();
-          return img;
+          if (!animationLoadingDisposed) globalClips.clips[key].images = images;
+          else for (const image of images) if (image && 'close' in image) image.close();
         };
-
-        const animKeys = Object.keys(STICKMAN_ANIMS);
-        const framesByAnim: Record<string, (HTMLImageElement | ImageBitmap)[]> = {};
-        for (const key of animKeys) framesByAnim[key] = [];
-        const loadFrame = async (key: string, def: StickmanAnimDef, frameIndex: number): Promise<boolean> => {
-          const url = getStickmanFrameUrl(key, def, frameIndex);
-          try {
-            framesByAnim[key][frameIndex] = await fastLoad(url);
-            return true;
-          } catch (err) {
-            console.warn(`[Animation] Missing frame ${key}[${frameIndex}] at ${url}`, err);
-            return false;
-          }
+        const queue = async (work: string[], workers: number, stepMs: number) => {
+          let next = 0;
+          await Promise.all(Array.from({ length: workers }, async () => {
+            while (!animationLoadingDisposed && next < work.length) {
+              const requested = work.findIndex((key, index) => index >= next && requestedClips.has(key));
+              // Warm unused clips in menus. A live match only loads animations it needs.
+              if (stepMs && startedRef.current && requested < 0) {
+                await new Promise(resolve => window.setTimeout(resolve, 100));
+                continue;
+              }
+              if (requested > next) [work[next], work[requested]] = [work[requested], work[next]];
+              const key = work[next++];
+              requestedClips.delete(key);
+              await loadClip(key, stepMs);
+              requestedClips.delete(key);
+            }
+          }));
         };
-
-        // CRITICAL animations (must load before game starts)
-        const critical = ['unarmed_idle', 'unarmed_walk', 'unarmed_run', 'unarmed_jump', 'pistol_idle', 'pistol_shoot', 'pistol_walk', 'pistol_run', 'pistol_run_shoot'];
-        
-        console.log('[Platformer] Phase 1: Loading critical animations...');
-        let phase1Done = 0;
-        const phase1Total = critical.reduce((sum, k) => sum + (STICKMAN_ANIMS[k]?.frames || 0), 0);
-
-        await Promise.all(critical.map(async (key) => {
-          const def = STICKMAN_ANIMS[key];
-          if (!def) return;
-          const loadCriticalFrame = async (i: number) => {
-            await loadFrame(key, def, i);
-            phase1Done++;
-          };
-          
-          // Load 100 frames in parallel
-          for (let batch = 0; batch < def.frames; batch += 100) {
-            await Promise.all(
-              Array.from({ length: Math.min(100, def.frames - batch) }, (_, i) => loadCriticalFrame(batch + i))
-            );
-          }
-        }));
-
-        // Register loaded animations and mark ready
-        for (const key of animKeys) {
-          const def = STICKMAN_ANIMS[key];
-          globalClips.clips[key] = {
-            images: framesByAnim[key].filter(Boolean),
-            fps: def.fps,
-            loop: def.loop
-          };
-        }
-        globalClips.ready = true;
-        const elapsed = ((performance.now() - t0) / 1000).toFixed(1);
-        console.log(`[Platformer] Game ready! (${phase1Done}/${phase1Total} critical frames in ${elapsed}s)`);
-        // PHASE 2: Background load remaining animations (non-blocking)
-        const remaining = animKeys.filter(k => !critical.includes(k) && STICKMAN_ANIMS[k]);
-        if (remaining.length > 0) {
-          const bgTotal = remaining.reduce((sum, k) => sum + STICKMAN_ANIMS[k].frames, 0);
-          console.log(`[Platformer] Phase 2: Loading ${bgTotal} background frames...`);
-          
-          setTimeout(async () => {
-            let bgDone = 0;
-            await Promise.all(remaining.map(async (key) => {
-              const def = STICKMAN_ANIMS[key];
-              await Promise.all(Array.from({ length: def.frames }, async (_, i) => {
-                await loadFrame(key, def, i);
-                bgDone++;
-                if (bgDone % 100 === 0) console.log(`[Platformer] Background: ${bgDone}/${bgTotal}`);
-              }));
-              
-              globalClips.clips[key].images = framesByAnim[key].filter(Boolean);
-            }));
-            
-            const totalTime = ((performance.now() - t0) / 1000).toFixed(1);
-            console.log(`[Platformer] All animations loaded! (${totalTime}s total)`);
-          }, 100);
-        }
+        await queue(keys.filter(key => critical.has(key)), 4, 0);
+        if (animationLoadingDisposed) return;
+        await queue(keys.filter(key => !critical.has(key)), 1, 30);
       };
-
       loadAnimations().catch(err => console.error('[Platformer] Animation load error:', err));
 
     // Stats.js FPS overlay (dev only) - positioned bottom right
@@ -1711,6 +1679,16 @@ const BULLET_IMPACT_PROFILES: Record<string, BulletImpactProfile> = {
     const postCtx = post.getContext('2d') as CanvasRenderingContext2D;
     const post2 = document.createElement('canvas');
     const post2Ctx = post2.getContext('2d') as CanvasRenderingContext2D;
+    const bloomBlur = document.createElement('canvas');
+    const bloomBlurCtx = bloomBlur.getContext('2d') as CanvasRenderingContext2D;
+    const crtStripe = document.createElement('canvas');
+    crtStripe.width = 1;
+    crtStripe.height = 4;
+    const crtStripeCtx = crtStripe.getContext('2d');
+    crtStripeCtx?.fillRect(0, 0, 1, 1);
+    const crtPattern = ctx.createPattern(crtStripe, 'repeat');
+    let vignette: CanvasGradient | undefined;
+    let vignetteAlpha = -1;
     const noise = document.createElement('canvas');
     const noiseCtx = noise.getContext('2d') as CanvasRenderingContext2D;
     const emojiTintCanvas = document.createElement('canvas');
@@ -2385,22 +2363,33 @@ const BULLET_IMPACT_PROFILES: Record<string, BulletImpactProfile> = {
       }
     }
 
-    // DPR-aware sizing
+    // Keep world and input coordinates in CSS pixels. Only the backing store scales.
+    const qualityScales = [1, 0.85, 0.7, 0.55, 0.45, 0.35, 0.3];
+    const initialPixels = window.innerWidth * window.innerHeight;
+    let quality = qualityScales.findIndex(scale => initialPixels * scale * scale <= 205_000);
+    if (quality < 0) quality = qualityScales.length - 1;
+    let sceneScale = 1;
+    let resizeQuality = false;
+    let lastMenuFrame = -Infinity;
+    let goodWindows = 0;
+    let lastQualityChange = performance.now();
     const resize = () => {
-      const dpr = Math.max(1, Math.min(2, (window.devicePixelRatio || 1)));
+      sceneScale = qualityScales[quality];
       const width = window.innerWidth;
       const height = window.innerHeight;
-      canvas.width = Math.floor(width * dpr);
-      canvas.height = Math.floor(height * dpr);
+      canvas.width = Math.max(1, Math.round(width * sceneScale));
+      canvas.height = Math.max(1, Math.round(height * sceneScale));
       canvas.style.width = `${width}px`;
       canvas.style.height = `${height}px`;
-      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ctx.setTransform(sceneScale, 0, 0, sceneScale, 0, 0);
+      ctx.imageSmoothingEnabled = false;
+      vignette = undefined;
       // Post-process buffer sizes
       const retro = settingsRef.current.retro;
       post.width = Math.max(1, Math.floor(canvas.width / retro.pixelScale));
       post.height = Math.max(1, Math.floor(canvas.height / retro.pixelScale));
-      post2.width = post.width;
-      post2.height = post.height;
+      post2.width = bloomBlur.width = Math.max(1, Math.floor(canvas.width / 6));
+      post2.height = bloomBlur.height = Math.max(1, Math.floor(canvas.height / 6));
     };
     resize();
     window.addEventListener("resize", resize);
@@ -2561,7 +2550,7 @@ const BULLET_IMPACT_PROFILES: Record<string, BulletImpactProfile> = {
     function ensureRain() {
       if (!settingsRef.current.visual.rain) return;
       while (rainDrops.length < 220) {
-        rainDrops.push({ x: Math.random() * canvas.width, y: Math.random() * canvas.height, vy: 900 + Math.random() * 600 });
+        rainDrops.push({ x: Math.random() * canvas.clientWidth, y: Math.random() * canvas.clientHeight, vy: 900 + Math.random() * 600 });
       }
     }
     const floatingTexts: { x: number; y: number; vx: number; vy: number; life: number; text: string; color: string; size?: number }[] = [];
@@ -4594,42 +4583,8 @@ const BULLET_IMPACT_PROFILES: Record<string, BulletImpactProfile> = {
       }
     };
     canvas.addEventListener('wheel', wheelScroll, { passive: false });
-    // Initialize - spawn based on map type
-    const currentMap = currentMapRef.current;
-    
-    // ========== MAP INITIALIZATION - ALL MAPS IN ONE PLACE ==========
-    
-    // 1. Initialize map-specific state
-    if (currentMap.id === 'city-platformer') {
-      // Metropolis: procedural platforms in the air
-      metropolisState = MetropolisMap.initMetropolisState();
-    } else if (currentMap.id === 'suburban-day') {
-      // Suburbia: houses/buildings as platforms
-      suburbiaState = SuburbiaMap.initializeSuburbiaState();
-    } else if (currentMap.id === 'rooftop-sunset') {
-      // Rooftops: rooftops only
-      rooftopsState = RooftopsMap.initRooftopsState();
-    }
-    
-    // 2. Generate platforms and spawn player
-    const spawnX = currentMap.spawnPoints?.[0]?.x ?? SPAWN_OFFSET_X;
-    ensurePlatformsAround(spawnX);
-    
-    // Find platform to spawn on
-    const startPlatform = platforms.find(p => 
-      p.x <= spawnX && p.x + p.width >= spawnX
-    ) || platforms[0];
-    
-    if (startPlatform) {
-      player.position.x = spawnX;
-      player.position.y = startPlatform.y - player.radius - 2;
-    } else {
-      player.position.x = spawnX;
-      player.position.y = groundYAt(spawnX) - player.radius - 2;
-    }
-    
-    // ========== END MAP INITIALIZATION ==========
-    
+    initializeArena();
+
     // ===== Multiplayer: Helper to sync bullet creation =====
     function syncBulletToMultiplayer(bullet: Bullet, weaponType: string) {
       if (!multiplayerStateRef.current.isMultiplayerGame || bullet.from !== "player") return;
@@ -4760,7 +4715,7 @@ const BULLET_IMPACT_PROFILES: Record<string, BulletImpactProfile> = {
               }
               
               // Local feedback
-              setRemotePlayers(prev => {
+              updateRemotePlayers(prev => {
                 const updated = new Map(prev);
                 const victim = updated.get(remotePlayer.id);
                 if (victim) {
@@ -4969,7 +4924,7 @@ const BULLET_IMPACT_PROFILES: Record<string, BulletImpactProfile> = {
                 });
               }
               
-              setRemotePlayers(prev => {
+              updateRemotePlayers(prev => {
                 const updated = new Map(prev);
                 const victim = updated.get(remotePlayer.id);
                 if (victim) {
@@ -5277,8 +5232,8 @@ const BULLET_IMPACT_PROFILES: Record<string, BulletImpactProfile> = {
 
       // Screen-space confetti on big explosions (map world -> screen using camera)
       if (radius >= 120) {
-        const sx = (x - camera.x) / (ctx.canvas.width || 1);
-        const sy = (y - camera.y) / (ctx.canvas.height || 1);
+        const sx = (x - camera.x) / (canvas.clientWidth || 1);
+        const sy = (y - camera.y) / (canvas.clientHeight || 1);
         // Confetti effect was removed to avoid external CDN dependency during static export.
       }
     }
@@ -5341,6 +5296,8 @@ const BULLET_IMPACT_PROFILES: Record<string, BulletImpactProfile> = {
       updateMs: 0,
       renderMs: 0,
       visiblePlatforms: 0,
+      quality,
+      renderScale: sceneScale,
       platformCache: platformCacheManager.getStats(),
     };
     (window as any).__platformerFrameTelemetry = frameTelemetry;
@@ -5358,6 +5315,8 @@ const BULLET_IMPACT_PROFILES: Record<string, BulletImpactProfile> = {
       frameTelemetry.updateMs = updateMs;
       frameTelemetry.renderMs = renderMs;
       frameTelemetry.visiblePlatforms = visiblePlatformDrawCount;
+      frameTelemetry.quality = quality;
+      frameTelemetry.renderScale = sceneScale;
 
       if (frameEnd - telemetryWindowStart >= 1000) {
         frameTelemetry.fps = (telemetryFrameCount * 1000) / (frameEnd - telemetryWindowStart);
@@ -5370,6 +5329,19 @@ const BULLET_IMPACT_PROFILES: Record<string, BulletImpactProfile> = {
           lastPerfLog = frameEnd;
         }
 
+        if (startedRef.current && runningRef.current && frameEnd - lastQualityChange > 1800) {
+          const slow = frameTelemetry.fps < 59 || frameTelemetry.avgFrameMs > 12;
+          const headroom = frameTelemetry.fps >= 59 && frameTelemetry.avgFrameMs < 7;
+          goodWindows = headroom ? goodWindows + 1 : 0;
+          const next = slow ? Math.min(quality + 1, qualityScales.length - 1)
+            : goodWindows >= 10 ? Math.max(0, quality - 1) : quality;
+          if (next !== quality) {
+            quality = next;
+            lastQualityChange = frameEnd;
+            goodWindows = 0;
+            resizeQuality = true;
+          }
+        }
         telemetryWindowStart = frameEnd;
         telemetryFrameCount = 0;
         telemetryFrameMsTotal = 0;
@@ -5394,7 +5366,7 @@ const BULLET_IMPACT_PROFILES: Record<string, BulletImpactProfile> = {
       lastTime = now;
 
       // Early exit for hidden tabs - avoid ALL processing
-      if (document.hidden) {
+      if (document.hidden || (!startedRef.current && now - lastMenuFrame < 200)) {
         dt = 0;
         rafId = requestAnimationFrame(step);
         if (stats) stats.end();
@@ -5412,6 +5384,11 @@ const BULLET_IMPACT_PROFILES: Record<string, BulletImpactProfile> = {
       }
       
       const renderStart = performance.now();
+      if (!startedRef.current) lastMenuFrame = now;
+      if (resizeQuality) {
+        resizeQuality = false;
+        resize();
+      }
       render();
       const renderMs = performance.now() - renderStart;
       updateFrameTelemetry(now, updateMs, renderMs);
@@ -5719,7 +5696,7 @@ const BULLET_IMPACT_PROFILES: Record<string, BulletImpactProfile> = {
       // If hurt animation is playing, let it finish
       if (isInHurtAnimation) {
         const currentClip = globalClips.clips[player.animKey];
-        if (currentClip && player.animFrame < currentClip.images.length - 0.5) {
+        if (currentClip && player.animFrame < currentClip.frames - 0.5) {
           nextKey = player.animKey;
           shouldHoldUntilEnd = true;
         }
@@ -5728,7 +5705,7 @@ const BULLET_IMPACT_PROFILES: Record<string, BulletImpactProfile> = {
       // Highest priority: Check if attack key is STILL HELD (handles both ongoing and just-completed attacks)
       else if (attackLockActive && player.onGround) {
         const currentClip = globalClips.clips[player.animKey];
-        const attackNotComplete = currentClip && player.animFrame < currentClip.images.length - 0.5;
+        const attackNotComplete = currentClip && player.animFrame < currentClip.frames - 0.5;
         
         // Check which attack is current and if its key is still held
         let keyStillHeld = false;
@@ -5883,7 +5860,7 @@ const BULLET_IMPACT_PROFILES: Record<string, BulletImpactProfile> = {
       }
       // Update facing and advance frame
       const clip = globalClips.clips[player.animKey];
-      if (clip && clip.images.length > 0) {
+      if (clip && clip.frames > 0) {
         const prevFrame = Math.floor(player.animFrame);
         
         // For pistol_shoot, dynamically adjust fps based on weapon fire rate
@@ -5894,7 +5871,7 @@ const BULLET_IMPACT_PROFILES: Record<string, BulletImpactProfile> = {
           if (weapon) {
             // Calculate fps so animation duration = fireRateMs
             // fps = frames / seconds = frames / (fireRateMs / 1000)
-            effectiveFps = clip.images.length / (weapon.fireRateMs / 1000);
+            effectiveFps = clip.frames / (weapon.fireRateMs / 1000);
           }
         }
         
@@ -6013,7 +5990,7 @@ const BULLET_IMPACT_PROFILES: Record<string, BulletImpactProfile> = {
         
         if (clip.loop) {
           // Perfect smooth looping - wrap without ever hitting frame count
-          const totalFrames = clip.images.length;
+          const totalFrames = clip.frames;
           while (player.animFrame >= totalFrames) {
             player.animFrame -= totalFrames;
           }
@@ -6022,8 +5999,8 @@ const BULLET_IMPACT_PROFILES: Record<string, BulletImpactProfile> = {
           }
         } else {
           // Non-looping animations
-          const wasComplete = player.animFrame >= clip.images.length;
-          player.animFrame = Math.min(player.animFrame, clip.images.length - 0.01); // Stay on last frame
+          const wasComplete = player.animFrame >= clip.frames;
+          player.animFrame = Math.min(player.animFrame, clip.frames - 0.01); // Stay on last frame
           
           // Release hold when animation truly completes (reached the end)
           if (wasComplete && player.animHoldUntilEnd) {
@@ -6091,6 +6068,9 @@ const BULLET_IMPACT_PROFILES: Record<string, BulletImpactProfile> = {
       // Collisions with platforms (top-only)
       collideCircleWithPlatformsTop(player.position, player.radius, player);
       applyPlatformFeatureEffects(player);
+      if (currentMapRef.current.id === 'rooftop-sunset' && player.position.y > world.baseGroundY + 200) {
+        placeFighterAtSpawn(player, getLocalSpawnIndex());
+      }
 
       // Camera follow with shake
       const targetCameraX = player.position.x - canvas.clientWidth * 0.5;
@@ -6489,7 +6469,7 @@ const BULLET_IMPACT_PROFILES: Record<string, BulletImpactProfile> = {
                   }
                   
                   // Update remote player health immediately
-                  setRemotePlayers(prev => {
+                  updateRemotePlayers(prev => {
                     const updated = new Map(prev);
                     const victim = updated.get(explosionRemoteId);
                     if (victim) {
@@ -6546,7 +6526,7 @@ const BULLET_IMPACT_PROFILES: Record<string, BulletImpactProfile> = {
             
             // ===== Attacker-Side Local Feedback =====
             // Update remote player's health bar immediately
-            setRemotePlayers(prev => {
+            updateRemotePlayers(prev => {
               const updated = new Map(prev);
               const victim = updated.get(remoteId);
               if (victim) {
@@ -6738,7 +6718,7 @@ const BULLET_IMPACT_PROFILES: Record<string, BulletImpactProfile> = {
                   }
                   
                   // Update remote player health immediately
-                  setRemotePlayers(prev => {
+                  updateRemotePlayers(prev => {
                     const updated = new Map(prev);
                     const victim = updated.get(remoteId);
                     if (victim) {
@@ -6800,8 +6780,8 @@ const BULLET_IMPACT_PROFILES: Record<string, BulletImpactProfile> = {
         const r = rainDrops[i];
         r.y += r.vy * dt;
         r.x += 200 * dt; // wind
-        if (r.y > canvas.height + 20) r.y = -20;
-        if (r.x > canvas.width + 20) r.x = -20;
+        if (r.y > canvas.clientHeight + 20) r.y = -20;
+        if (r.x > canvas.clientWidth + 20) r.x = -20;
       }
 
       // Pickup collision
@@ -6843,8 +6823,8 @@ const BULLET_IMPACT_PROFILES: Record<string, BulletImpactProfile> = {
       // AI Input Simulation - Simplified Aggressive AI
       function simulateAIInput(e: Enemy, dt: number) {
         if (!gameConfigRef.current.bots?.length || !e.input) return;
-        const screenWidth = canvas && typeof canvas.width === 'number' ? canvas.width : (typeof window !== 'undefined' ? window.innerWidth || 1920 : 1920);
-        const screenHeight = canvas && typeof canvas.height === 'number' ? canvas.height : (typeof window !== 'undefined' ? window.innerHeight || 1080 : 1080);
+        const screenWidth = canvas.clientWidth;
+        const screenHeight = canvas.clientHeight;
         const profile = getEnemyProfile(e.aiType!);
         
         const input = e.input;
@@ -7213,7 +7193,7 @@ const BULLET_IMPACT_PROFILES: Record<string, BulletImpactProfile> = {
         // If hurt animation is playing, let it finish
         else if (isInHurtAnimation) {
           const currentClip = globalClips.clips[e.animKey];
-          if (currentClip && e.animFrame < currentClip.images.length - 0.5) {
+          if (currentClip && e.animFrame < currentClip.frames - 0.5) {
             nextAnimKey = e.animKey;
             shouldHoldUntilEnd = true;
           }
@@ -7252,7 +7232,7 @@ const BULLET_IMPACT_PROFILES: Record<string, BulletImpactProfile> = {
         // Let attack animations finish
         else if (attackLockActive && e.animHoldUntilEnd) {
           const clip = globalClips.clips[e.animKey];
-          if (clip && e.animFrame < clip.images.length - 0.5) {
+          if (clip && e.animFrame < clip.frames - 0.5) {
             nextAnimKey = e.animKey;
             shouldHoldUntilEnd = true;
           }
@@ -7309,13 +7289,13 @@ const BULLET_IMPACT_PROFILES: Record<string, BulletImpactProfile> = {
         
         // Advance animation
         const clip = globalClips.clips[e.animKey];
-        if (clip && clip.images.length > 0) {
+        if (clip && clip.frames > 0) {
           e.animFrame += clip.fps * dt;
           if (clip.loop) {
-            while (e.animFrame >= clip.images.length) e.animFrame -= clip.images.length;
+            while (e.animFrame >= clip.frames) e.animFrame -= clip.frames;
           } else {
-            if (e.animFrame >= clip.images.length) {
-              e.animFrame = clip.images.length - 0.01;
+            if (e.animFrame >= clip.frames) {
+              e.animFrame = clip.frames - 0.01;
               // Release hold when non-looping animation completes
               if (e.animHoldUntilEnd) {
                 e.animHoldUntilEnd = false;
@@ -7496,7 +7476,7 @@ const BULLET_IMPACT_PROFILES: Record<string, BulletImpactProfile> = {
           
           // Check if death animation is complete
           const dieClip = globalClips.clips[e.animKey];
-          const isDeathComplete = e.animKey.includes('die') && dieClip && e.animFrame >= dieClip.images.length - 0.5;
+          const isDeathComplete = e.animKey.includes('die') && dieClip && e.animFrame >= dieClip.frames - 0.5;
           
           if (isDeathComplete) {
             // Only remove enemy after death animation completes
@@ -7555,7 +7535,7 @@ const BULLET_IMPACT_PROFILES: Record<string, BulletImpactProfile> = {
         
         currentRemotePlayers.forEach((remotePlayer) => {
           const clip = globalClips.clips[remotePlayer.animKey];
-          if (!clip || clip.images.length === 0) return;
+          if (!clip || clip.frames === 0) return;
           
           // Store previous frame for frame-crossing detection
           const prevFrame = Math.floor(remotePlayer.animFrame);
@@ -7650,13 +7630,13 @@ const BULLET_IMPACT_PROFILES: Record<string, BulletImpactProfile> = {
           
           // Handle looping/completion (same logic as local player)
           if (clip.loop) {
-            const totalFrames = clip.images.length;
+            const totalFrames = clip.frames;
             while (remotePlayer.animFrame >= totalFrames) {
               remotePlayer.animFrame -= totalFrames;
             }
           } else {
-            const wasComplete = remotePlayer.animFrame >= clip.images.length;
-            remotePlayer.animFrame = Math.min(remotePlayer.animFrame, clip.images.length - 0.01);
+            const wasComplete = remotePlayer.animFrame >= clip.frames;
+            remotePlayer.animFrame = Math.min(remotePlayer.animFrame, clip.frames - 0.01);
           }
         });
       }
@@ -7858,7 +7838,7 @@ const BULLET_IMPACT_PROFILES: Record<string, BulletImpactProfile> = {
               // Immediate visual feedback when hit lands (frames 3 and 8 for double punch)
               
               // Update remote player's health bar immediately
-              setRemotePlayers(prev => {
+              updateRemotePlayers(prev => {
                 const updated = new Map(prev);
                 const victim = updated.get(remotePlayer.id);
                 if (victim) {
@@ -8007,7 +7987,7 @@ const BULLET_IMPACT_PROFILES: Record<string, BulletImpactProfile> = {
         
         // Check if death animation is complete
         const dieClip = globalClips.clips[player.animKey];
-        const isDeathComplete = player.animKey.includes('die') && dieClip && player.animFrame >= dieClip.images.length - 0.5;
+        const isDeathComplete = player.animKey.includes('die') && dieClip && player.animFrame >= dieClip.frames - 0.5;
         
         if (isDeathComplete && lives > 0) {
           lives -= 1;
@@ -8066,6 +8046,7 @@ const BULLET_IMPACT_PROFILES: Record<string, BulletImpactProfile> = {
       try {
         (canvas as any)._ui = {
           hp: player.hp,
+          position: { x: player.position.x, y: player.position.y },
           maxHp: player.maxHp,
           opponent: gameConfigRef.current.bots?.length && enemies[0] ? {
             name: enemies[0].name,
@@ -8313,7 +8294,7 @@ const BULLET_IMPACT_PROFILES: Record<string, BulletImpactProfile> = {
       // No need to disable visual features - we maintain performance with all quality enabled!
 
       // Reset canvas state to avoid residual alpha/composite/filter effects
-      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.setTransform(sceneScale, 0, 0, sceneScale, 0, 0);
       ctx.globalAlpha = 1;
       ctx.globalCompositeOperation = 'source-over';
       ctx.filter = 'none';
@@ -8439,12 +8420,8 @@ const BULLET_IMPACT_PROFILES: Record<string, BulletImpactProfile> = {
       }
       ctx.globalAlpha = 1; // Reset once at end
 
-      if (settingsRef.current.debug.renderGround) {
-        if (currentMap.id === 'suburban-day') {
-          SuburbiaMap.drawSuburbanGround(ctx, camera, canvas); // FIXED: New flat street system
-        } else if (currentMap.id === 'city-platformer') {
-          MetropolisMap.drawMetropolisGround(ctx, camera, canvas, world, perlin.noise.bind(perlin));
-        }
+      if (settingsRef.current.debug.renderGround && currentMap.id === 'city-platformer') {
+        MetropolisMap.drawMetropolisGround(ctx, camera, canvas, world, perlin.noise.bind(perlin));
       }
       
       // ALWAYS render suburban street system (not just in debug mode)
@@ -8464,8 +8441,7 @@ const BULLET_IMPACT_PROFILES: Record<string, BulletImpactProfile> = {
       if (currentMap.id === 'rooftop-sunset') RooftopsMap.drawRooftopBuildings(ctx, currentMapRef.current, camera, world, canvas, totalTimeMs);
 
       if (settingsRef.current.debug.renderPlatforms) {
-        // Platform rendering is now async due to caching
-        drawPlatforms().catch(console.error);
+        drawPlatforms();
       }
 
       if (currentMap.boundaries) {
@@ -8500,14 +8476,6 @@ const BULLET_IMPACT_PROFILES: Record<string, BulletImpactProfile> = {
 
       // Particles
       if (settingsRef.current.debug.renderParticles) drawParticles();
-
-      // Proton particles (world space with camera transform)
-      ctx.save();
-      ctx.translate(-camera.x, -camera.y);
-      if (proton.renderers && proton.renderers.length > 0) {
-        proton.renderers[0].onProtonUpdate();
-      }
-      ctx.restore();
 
       // Shell casings
       // ===== PERFORMANCE: Viewport culling + reduced save/restore =====
@@ -8643,22 +8611,20 @@ const BULLET_IMPACT_PROFILES: Record<string, BulletImpactProfile> = {
         ctx.restore();
       }
 
-      // Additive bloom pass (cheap): blur sampled copy and add
-      if (settingsRef.current.debug.renderBloom && settingsRef.current.visual.bloom) {
-        try {
-          post2Ctx.clearRect(0, 0, post2.width, post2.height);
-          post2Ctx.globalAlpha = settingsRef.current.visual.bloomAlpha;
-          // Copy scene into low-res buffer
-          post2Ctx.drawImage(canvas, 0, 0, post2.width, post2.height);
-          // Cheap blur using canvas filter without readbacks
-          post2Ctx.filter = `blur(${Math.max(1, settingsRef.current.visual.bloomRadius)}px)`;
-          post2Ctx.drawImage(post2, 0, 0);
-          post2Ctx.filter = 'none';
-          ctx.globalCompositeOperation = 'lighter';
-          ctx.drawImage(post2, 0, 0, canvas.width, canvas.height);
-          ctx.globalCompositeOperation = 'source-over';
-          post2Ctx.globalAlpha = 1;
-        } catch {}
+      // Bloom is optional under load. Keep the blur and scene copies off the main canvas.
+      if (quality < 2 && settingsRef.current.debug.renderBloom && settingsRef.current.visual.bloom) {
+        post2Ctx.clearRect(0, 0, post2.width, post2.height);
+        post2Ctx.drawImage(canvas, 0, 0, post2.width, post2.height);
+        bloomBlurCtx.clearRect(0, 0, bloomBlur.width, bloomBlur.height);
+        bloomBlurCtx.filter = `blur(${Math.max(1, settingsRef.current.visual.bloomRadius / 3)}px)`;
+        bloomBlurCtx.drawImage(post2, 0, 0);
+        bloomBlurCtx.filter = 'none';
+        ctx.save();
+        ctx.globalCompositeOperation = 'lighter';
+        ctx.globalAlpha = settingsRef.current.visual.bloomAlpha;
+        ctx.imageSmoothingEnabled = true;
+        ctx.drawImage(bloomBlur, 0, 0, width, height);
+        ctx.restore();
       }
       // Pixelate the composed scene before UI/overlays
       const retro = settingsRef.current.retro;
@@ -8667,6 +8633,7 @@ const BULLET_IMPACT_PROFILES: Record<string, BulletImpactProfile> = {
         postCtx.imageSmoothingEnabled = false;
         postCtx.clearRect(0, 0, post.width, post.height);
         postCtx.drawImage(canvas, 0, 0, post.width, post.height);
+        ctx.save();
         ctx.setTransform(1, 0, 0, 1, 0, 0);
         ctx.imageSmoothingEnabled = false;
         ctx.clearRect(0, 0, canvas.width, canvas.height);
@@ -8682,6 +8649,7 @@ const BULLET_IMPACT_PROFILES: Record<string, BulletImpactProfile> = {
         } else {
           ctx.drawImage(post, 0, 0, canvas.width, canvas.height);
         }
+        ctx.restore();
       }
 
       // Rain overlay (screen space)
@@ -8753,7 +8721,7 @@ const BULLET_IMPACT_PROFILES: Record<string, BulletImpactProfile> = {
           noiseCtx.putImageData(id, 0, 0);
         }
         ctx.globalAlpha = visual.grainAlpha;
-        ctx.drawImage(noise, 0, 0);
+        ctx.drawImage(noise, 0, 0, width, height);
         ctx.globalAlpha = 1;
       }
 
@@ -8828,24 +8796,26 @@ const BULLET_IMPACT_PROFILES: Record<string, BulletImpactProfile> = {
       ctx.fillRect(x0, baseY - 40, (x1 - x0), 80);
     }
     function drawCRT() {
-      // Subtle scanlines + vignette
+      const { crtScanlineAlpha, vignetteAlpha: targetAlpha } = settingsRef.current.retro;
+      const w = canvas.width, h = canvas.height;
       ctx.save();
       ctx.setTransform(1, 0, 0, 1, 0, 0);
-      const w = ctx.canvas.width;
-      const h = ctx.canvas.height;
-      // Scanlines
-      ctx.globalAlpha = settingsRef.current.retro.crtScanlineAlpha;
-      for (let y = 0; y < h; y += 4) {
-        ctx.fillStyle = "#000";
-        ctx.fillRect(0, y, w, 1);
+      if (crtPattern && crtScanlineAlpha > 0) {
+        ctx.globalAlpha = crtScanlineAlpha;
+        ctx.fillStyle = crtPattern;
+        ctx.fillRect(0, 0, w, h);
       }
-      ctx.globalAlpha = 1;
-      // Vignette
-      const rg = ctx.createRadialGradient(w / 2, h / 2, Math.min(w, h) * 0.3, w / 2, h / 2, Math.max(w, h) * 0.7);
-      rg.addColorStop(0, 'rgba(0,0,0,0)');
-      rg.addColorStop(1, `rgba(0,0,0,${settingsRef.current.retro.vignetteAlpha})`);
-      ctx.fillStyle = rg;
-      ctx.fillRect(0, 0, w, h);
+      if (targetAlpha > 0) {
+        if (!vignette || targetAlpha !== vignetteAlpha) {
+          vignette = ctx.createRadialGradient(w / 2, h / 2, Math.min(w, h) * 0.3, w / 2, h / 2, Math.max(w, h) * 0.7);
+          vignette.addColorStop(0, 'rgba(0,0,0,0)');
+          vignette.addColorStop(1, `rgba(0,0,0,${targetAlpha})`);
+          vignetteAlpha = targetAlpha;
+        }
+        ctx.globalAlpha = 1;
+        ctx.fillStyle = vignette;
+        ctx.fillRect(0, 0, w, h);
+      }
       ctx.restore();
     }
 
@@ -8873,13 +8843,13 @@ const BULLET_IMPACT_PROFILES: Record<string, BulletImpactProfile> = {
      * Render a suburban house to an offscreen canvas for caching
      * This extracts all the complex house rendering logic into a cacheable format
      */
-    async function renderSuburbanHouseToCache(
+    function renderSuburbanHouseToCache(
       platform: Platform, 
       pSeed: number, 
       pw: number, 
       ph: number, 
       totalTimeMs: number
-    ): Promise<ImageBitmap> {
+    ): ImageBitmap | HTMLCanvasElement {
       const margin = 50;
       const { canvas: offscreenCanvas, ctx: offCtx } = createOffscreenCanvas(pw + margin * 2, ph + margin * 2);
       
@@ -9196,7 +9166,7 @@ const BULLET_IMPACT_PROFILES: Record<string, BulletImpactProfile> = {
       offCtx.lineTo(pw, 0);
       offCtx.stroke();
       
-      return await canvasToImageBitmap(offscreenCanvas);
+      return 'transferToImageBitmap' in offscreenCanvas ? offscreenCanvas.transferToImageBitmap() : offscreenCanvas;
     }
     
     /**
@@ -9248,13 +9218,14 @@ const BULLET_IMPACT_PROFILES: Record<string, BulletImpactProfile> = {
       }
     }
 
-    async function drawPlatforms() {
+    function drawPlatforms() {
       const left = camera.x - 100;
       const right = camera.x + canvas.clientWidth + 100;
       const top = camera.y - 200;
       const bottom = camera.y + canvas.clientHeight + 200;
       const currentMap = currentMapRef.current;
       visiblePlatformDrawCount = 0;
+      let canBuildHouse = true;
       
       // For rooftop map, DON'T draw any platforms - buildings are drawn separately
       if (currentMap.id === 'rooftop-sunset') {
@@ -9283,15 +9254,22 @@ const BULLET_IMPACT_PROFILES: Record<string, BulletImpactProfile> = {
           const cacheKey = platformCacheManager.generateCacheKey(p, currentMap.id);
           let cachedHouse = platformCacheManager.get(cacheKey);
           
-          if (!cachedHouse) {
-            // Render house to offscreen canvas for caching
-            cachedHouse = await renderSuburbanHouseToCache(p, pSeed, pw, ph, totalTimeMs);
+          if (!cachedHouse && canBuildHouse) {
+            canBuildHouse = false;
+            cachedHouse = renderSuburbanHouseToCache(p, pSeed, pw, ph, totalTimeMs);
             platformCacheManager.set(cacheKey, cachedHouse);
           }
           
           // Ultra-fast single drawImage call!
           const margin = 50;
-          ctx.drawImage(cachedHouse, px - margin, py - margin);
+          if (cachedHouse) {
+            ctx.drawImage(cachedHouse, px - margin, py - margin);
+          } else {
+            ctx.fillStyle = '#5a5a5a';
+            ctx.fillRect(px, py, pw, ph);
+            ctx.fillStyle = '#aaa';
+            ctx.fillRect(px, py, pw, 3);
+          }
           
           // Handle dynamic elements separately (can't be cached)
           if (p.kind === 'hover' && (p.hasThrusters || p.motion)) {
@@ -9379,7 +9357,7 @@ const BULLET_IMPACT_PROFILES: Record<string, BulletImpactProfile> = {
             ctx.fill();
 
             ctx.shadowColor = lampColor;
-            ctx.shadowBlur = 25;
+            ctx.shadowBlur = quality === 0 ? 25 : 0;
             ctx.beginPath();
             ctx.arc(lampBaseX + 12, lampBaseY - lampHeight + 6, 16, 0, Math.PI * 2);
             ctx.fill();
@@ -9415,6 +9393,29 @@ const BULLET_IMPACT_PROFILES: Record<string, BulletImpactProfile> = {
       c.beginPath(); c.moveTo(0,12); c.lineTo(8,24); c.moveTo(0,12); c.lineTo(-8,24); c.stroke();
       c.restore();
     }
+    function drawCharacterFrame(key: string, frame: number, radius: number, facing: number, fallback: string) {
+      const clip = globalClips.clips[key];
+      const images = clip?.images;
+      if (clip && !images?.length) requestedClips.add(key);
+      const current = images?.[Math.max(0, Math.min(images.length - 1, Math.floor(frame)))];
+      const idle = globalClips.clips[key.startsWith('pistol') ? 'pistol_idle' : 'unarmed_idle']?.images[0];
+      const image = current ?? idle;
+      if (!image) {
+        ctx.beginPath();
+        ctx.arc(0, 0, radius, 0, Math.PI * 2);
+        ctx.fillStyle = fallback;
+        ctx.fill();
+        return;
+      }
+      const ratio = radius / DEFAULT_PLAYER_RADIUS;
+      const scale = BASE_SPRITE_SCALE * ratio;
+      ctx.save();
+      ctx.scale(facing, 1);
+      ctx.drawImage(image, -BASE_OFFSET_X * ratio, radius - BASE_OFFSET_Y * ratio,
+        STICKMAN_BOUNDS.width * scale, STICKMAN_BOUNDS.height * scale);
+      ctx.restore();
+    }
+
     function drawPlayer() {
       drawShadow(ctx, player.position.x, player.position.y + player.radius, player.radius);
 
@@ -9454,45 +9455,7 @@ const BULLET_IMPACT_PROFILES: Record<string, BulletImpactProfile> = {
       ctx.save();
       ctx.translate(player.position.x, player.position.y);
 
-      // Draw stickman sprite if loaded
-      if (globalClips.ready) {
-        const clip = globalClips.clips[player.animKey];
-        if (clip && clip.images.length > 0) {
-          // Clamp frame index to valid range
-          let frameIndex = Math.floor(player.animFrame);
-          frameIndex = Math.max(0, Math.min(clip.images.length - 1, frameIndex));
-
-          const image = clip.images[frameIndex];
-          if (image) {
-            const scale = BASE_SPRITE_SCALE * (player.radius / DEFAULT_PLAYER_RADIUS);
-            const offsetX = BASE_OFFSET_X * (player.radius / DEFAULT_PLAYER_RADIUS);
-            const offsetY = BASE_OFFSET_Y * (player.radius / DEFAULT_PLAYER_RADIUS);
-
-            const intrinsicWidth = (image as ImageBitmap).width ?? (image as HTMLImageElement).naturalWidth ?? 0;
-            const intrinsicHeight = (image as ImageBitmap).height ?? (image as HTMLImageElement).naturalHeight ?? 0;
-            const drawWidth = intrinsicWidth > 0 ? intrinsicWidth * scale : 0;
-            const drawHeight = intrinsicHeight > 0 ? intrinsicHeight * scale : 0;
-
-            ctx.save();
-            ctx.scale(player.facing, 1);
-            if (drawWidth > 0 && drawHeight > 0) {
-              ctx.drawImage(image as any, -offsetX, player.radius - offsetY, drawWidth, drawHeight);
-            } else {
-              ctx.drawImage(image as any, -offsetX, player.radius - offsetY);
-            }
-            ctx.restore();
-          }
-        }
-      } else {
-        // Fallback circle body while animations load
-      ctx.beginPath();
-      ctx.arc(0, 0, player.radius, 0, Math.PI * 2);
-      ctx.fillStyle = bodyColor;
-          ctx.shadowColor = '#ff98cb';
-          ctx.shadowBlur = 12;
-          ctx.fill();
-      ctx.shadowBlur = 0;
-      }
+      drawCharacterFrame(player.animKey, player.animFrame, player.radius, player.facing, bodyColor);
 
       ctx.save();
       ctx.rotate(aimAngle);
@@ -9603,55 +9566,9 @@ const BULLET_IMPACT_PROFILES: Record<string, BulletImpactProfile> = {
           ctx.restore();
         }
         
-        // Draw remote player sprite (using same logic as local player)
-        if (globalClips.ready) {
-          const clip = globalClips.clips[remotePlayer.animKey];
-          if (clip && clip.images.length > 0) {
-            let frameIndex = Math.floor(remotePlayer.animFrame);
-            frameIndex = Math.max(0, Math.min(clip.images.length - 1, frameIndex));
-            
-            const image = clip.images[frameIndex];
-            if (image) {
-              const scale = BASE_SPRITE_SCALE * (player.radius / DEFAULT_PLAYER_RADIUS);
-              const offsetX = BASE_OFFSET_X * (player.radius / DEFAULT_PLAYER_RADIUS);
-              const offsetY = BASE_OFFSET_Y * (player.radius / DEFAULT_PLAYER_RADIUS);
-              
-              const intrinsicWidth = (image as ImageBitmap).width ?? (image as HTMLImageElement).naturalWidth ?? 0;
-              const intrinsicHeight = (image as ImageBitmap).height ?? (image as HTMLImageElement).naturalHeight ?? 0;
-              const drawWidth = intrinsicWidth > 0 ? intrinsicWidth * scale : 0;
-              const drawHeight = intrinsicHeight > 0 ? intrinsicHeight * scale : 0;
-              
-              ctx.save();
-              // Use facing direction like local player (1 or -1)
-              ctx.scale(remotePlayer.facingRight ? 1 : -1, 1);
-              
-              if (drawWidth > 0 && drawHeight > 0) {
-                // Draw at same position as local player
-                ctx.drawImage(image as any, -offsetX, player.radius - offsetY, drawWidth, drawHeight);
-              } else {
-                ctx.drawImage(image as any, -offsetX, player.radius - offsetY);
-              }
-              ctx.restore();
-            }
-          }
-        }
-        
-        // Draw username above player (using same positioning as local player)
-        ctx.font = "600 13px 'Rajdhani', 'Share Tech Mono', ui-monospace";
-        ctx.textAlign = "center";
-        ctx.fillStyle = "#ffd700";
-        const spriteHeight = STICKMAN_BOUNDS.visibleHeight * BASE_SPRITE_SCALE * (player.radius / DEFAULT_PLAYER_RADIUS);
-        ctx.fillText(remotePlayer.username || "Player", 0, -spriteHeight / 2 - 105);
-        
-        // Draw health bar above username
-        const w = 70;
-        const h = 6;
-        const hpRatio = Math.max(0, remotePlayer.health / remotePlayer.maxHealth);
-        ctx.fillStyle = "rgba(0,0,0,0.5)";
-        ctx.fillRect(-w / 2, -spriteHeight / 2 - 95, w, h);
-        ctx.fillStyle = "#ff6666";
-        ctx.fillRect(-w / 2, -spriteHeight / 2 - 95, w * hpRatio, h);
-        
+        drawCharacterFrame(remotePlayer.animKey, remotePlayer.animFrame, player.radius,
+          remotePlayer.facingRight ? 1 : -1, '#e5e5e5');
+
         ctx.restore();
       });
     }
@@ -9679,50 +9596,10 @@ const BULLET_IMPACT_PROFILES: Record<string, BulletImpactProfile> = {
         ctx.save();
         ctx.translate(e.position.x, e.position.y);
         
-        if (globalClips.ready) {
-          const clip = globalClips.clips[e.animKey];
-          if (clip && clip.images.length > 0) {
-            // Clamp frame index to valid range
-            let frameIndex = Math.floor(e.animFrame);
-            frameIndex = Math.max(0, Math.min(clip.images.length - 1, frameIndex));
-
-            const image = clip.images[frameIndex];
-            if (image) {
-              const scale = BASE_SPRITE_SCALE * (e.radius / DEFAULT_PLAYER_RADIUS);
-              const offsetX = BASE_OFFSET_X * (e.radius / DEFAULT_PLAYER_RADIUS);
-              const offsetY = BASE_OFFSET_Y * (e.radius / DEFAULT_PLAYER_RADIUS);
-
-              const intrinsicWidth = (image as ImageBitmap).width ?? (image as HTMLImageElement).naturalWidth ?? 0;
-              const intrinsicHeight = (image as ImageBitmap).height ?? (image as HTMLImageElement).naturalHeight ?? 0;
-              const drawWidth = intrinsicWidth > 0 ? intrinsicWidth * scale : 0;
-              const drawHeight = intrinsicHeight > 0 ? intrinsicHeight * scale : 0;
-
-              // Apply enemy glow and flash
         ctx.shadowColor = ENEMY_GLOW[e.aiType!] || '#9be0ff';
-        ctx.shadowBlur = 16 + flashA * 20;
-              
-              ctx.save();
-              ctx.scale(e.facing, 1);
-              if (drawWidth > 0 && drawHeight > 0) {
-                ctx.drawImage(image as any, -offsetX, e.radius - offsetY, drawWidth, drawHeight);
-              } else {
-                ctx.drawImage(image as any, -offsetX, e.radius - offsetY);
-              }
-              ctx.restore();
-              ctx.shadowBlur = 0;
-            }
-          }
-        } else {
-          // Fallback circle while animations load
-          ctx.shadowColor = ENEMY_GLOW[e.aiType!] || '#9be0ff';
-          ctx.shadowBlur = 16 + flashA * 20;
-        ctx.beginPath();
-        ctx.arc(0, 0, e.radius, 0, Math.PI * 2);
-        ctx.fillStyle = ENEMY_GLOW[e.aiType!] || '#9be0ff';
-        ctx.fill();
-        ctx.shadowBlur = 0;
-        }
-        
+        ctx.shadowBlur = quality === 0 ? 16 + flashA * 20 : 0;
+        drawCharacterFrame(e.animKey, e.animFrame, e.radius, e.facing, ENEMY_GLOW[e.aiType!] || '#9be0ff');
+
         ctx.restore();
  
         // Account for 3x scaled sprite height
@@ -9916,7 +9793,7 @@ const BULLET_IMPACT_PROFILES: Record<string, BulletImpactProfile> = {
             const bulletSize = b.type === 'minigun' ? 6 : b.type === 'rifle' ? 8 : 7;
             const bulletLength = b.type === 'minigun' ? 10 : b.type === 'rifle' ? 14 : 12;
             // Glow
-            ctx.shadowBlur = 12;
+            ctx.shadowBlur = quality === 0 ? 12 : 0;
             ctx.shadowColor = '#ffaa00';
             // Bullet casing (gold)
             ctx.fillStyle = '#ffaa00';
@@ -9933,7 +9810,7 @@ const BULLET_IMPACT_PROFILES: Record<string, BulletImpactProfile> = {
             
           case 'shotgun':
             // Shotgun pellets - small orange spheres
-            ctx.shadowBlur = 10;
+            ctx.shadowBlur = quality === 0 ? 10 : 0;
             ctx.shadowColor = '#ff6600';
             const grad1 = ctx.createRadialGradient(0, 0, 0, 0, 0, 5);
             grad1.addColorStop(0, '#ffaa44');
@@ -9946,7 +9823,7 @@ const BULLET_IMPACT_PROFILES: Record<string, BulletImpactProfile> = {
             
           case 'rocket':
             // Rocket - red with flame trail
-            ctx.shadowBlur = 16;
+            ctx.shadowBlur = quality === 0 ? 16 : 0;
             ctx.shadowColor = '#ff0000';
             // Rocket body
             ctx.fillStyle = '#cc0000';
@@ -9971,7 +9848,7 @@ const BULLET_IMPACT_PROFILES: Record<string, BulletImpactProfile> = {
           case 'grenade':
           case 'bomb':
             // Grenade - dark green sphere with highlight
-            ctx.shadowBlur = 12;
+            ctx.shadowBlur = quality === 0 ? 12 : 0;
             ctx.shadowColor = '#00ff00';
             const grenadeGrad = ctx.createRadialGradient(-2, -2, 0, 0, 0, 9);
             grenadeGrad.addColorStop(0, '#88ff88');
@@ -9989,7 +9866,7 @@ const BULLET_IMPACT_PROFILES: Record<string, BulletImpactProfile> = {
           case 'flame':
             // Flame particle - orange/red fireball
             const flameSize = 8 + Math.random() * 4;
-            ctx.shadowBlur = 16;
+            ctx.shadowBlur = quality === 0 ? 16 : 0;
             ctx.shadowColor = '#ff6600';
             const flameParticleGrad = ctx.createRadialGradient(0, 0, 0, 0, 0, flameSize);
             flameParticleGrad.addColorStop(0, '#ffff88');
@@ -10004,7 +9881,7 @@ const BULLET_IMPACT_PROFILES: Record<string, BulletImpactProfile> = {
             
           case 'ice':
             // Ice shard - cyan/blue crystalline
-            ctx.shadowBlur = 14;
+            ctx.shadowBlur = quality === 0 ? 14 : 0;
             ctx.shadowColor = '#00ffff';
             const iceGrad = ctx.createLinearGradient(-8, 0, 8, 0);
             iceGrad.addColorStop(0, '#aaffff');
@@ -10031,7 +9908,7 @@ const BULLET_IMPACT_PROFILES: Record<string, BulletImpactProfile> = {
             
           case 'laser':
             // Laser beam - red glowing bolt
-            ctx.shadowBlur = 18;
+            ctx.shadowBlur = quality === 0 ? 18 : 0;
             ctx.shadowColor = '#ff0000';
             // Outer glow
             const laserOuterGrad = ctx.createRadialGradient(0, 0, 0, 0, 0, 8);
@@ -10055,7 +9932,7 @@ const BULLET_IMPACT_PROFILES: Record<string, BulletImpactProfile> = {
             
           case 'plasma':
             // Plasma ball - purple/pink energy sphere
-            ctx.shadowBlur = 16;
+            ctx.shadowBlur = quality === 0 ? 16 : 0;
             ctx.shadowColor = '#ff00ff';
             const plasmaGrad = ctx.createRadialGradient(-2, -2, 0, 0, 0, 10);
             plasmaGrad.addColorStop(0, '#ffffff');
@@ -10079,7 +9956,7 @@ const BULLET_IMPACT_PROFILES: Record<string, BulletImpactProfile> = {
           case 'spear':
             // Arrow/spear - brown shaft with silver tip
             const arrowLength = b.type === 'spear' ? 24 : 20;
-            ctx.shadowBlur = 8;
+            ctx.shadowBlur = quality === 0 ? 8 : 0;
             ctx.shadowColor = '#ffffff';
             // Shaft
             ctx.fillStyle = b.type === 'spear' ? '#888888' : '#8B4513';
@@ -10105,7 +9982,7 @@ const BULLET_IMPACT_PROFILES: Record<string, BulletImpactProfile> = {
             // Boomerang - rotating curved shape
             const boomerangAngle = (Date.now() * 0.02) % (Math.PI * 2);
             ctx.rotate(boomerangAngle);
-            ctx.shadowBlur = 12;
+            ctx.shadowBlur = quality === 0 ? 12 : 0;
             ctx.shadowColor = '#ffaa00';
             ctx.fillStyle = '#ffaa00';
             ctx.beginPath();
@@ -10119,7 +9996,7 @@ const BULLET_IMPACT_PROFILES: Record<string, BulletImpactProfile> = {
             
           case 'wand':
             // Magic projectile - sparkly star
-            ctx.shadowBlur = 18;
+            ctx.shadowBlur = quality === 0 ? 18 : 0;
             ctx.shadowColor = '#ffff00';
             const starGrad = ctx.createRadialGradient(0, 0, 0, 0, 0, 10);
             starGrad.addColorStop(0, '#ffffff');
@@ -10146,7 +10023,7 @@ const BULLET_IMPACT_PROFILES: Record<string, BulletImpactProfile> = {
             // Spinning blade
             const bladeAngle = (Date.now() * 0.03) % (Math.PI * 2);
             ctx.rotate(bladeAngle);
-            ctx.shadowBlur = 10;
+            ctx.shadowBlur = quality === 0 ? 10 : 0;
             ctx.shadowColor = '#ff0000';
             // Blade
             ctx.fillStyle = '#c0c0c0';
@@ -10170,7 +10047,7 @@ const BULLET_IMPACT_PROFILES: Record<string, BulletImpactProfile> = {
             
           case 'railgun':
             // Railgun spike - cyan energy bolt
-            ctx.shadowBlur = 20;
+            ctx.shadowBlur = quality === 0 ? 20 : 0;
             ctx.shadowColor = '#00ffff';
             const railGrad = ctx.createLinearGradient(-12, 0, 12, 0);
             railGrad.addColorStop(0, 'rgba(0, 255, 255, 0)');
@@ -10186,7 +10063,7 @@ const BULLET_IMPACT_PROFILES: Record<string, BulletImpactProfile> = {
             
           case 'cluster':
             // Cluster bomb - dark with glowing veins
-            ctx.shadowBlur = 14;
+            ctx.shadowBlur = quality === 0 ? 14 : 0;
             ctx.shadowColor = '#ff9900';
             const clusterGrad = ctx.createRadialGradient(-2, -2, 0, 0, 0, 10);
             clusterGrad.addColorStop(0, '#ffaa44');
@@ -10211,7 +10088,7 @@ const BULLET_IMPACT_PROFILES: Record<string, BulletImpactProfile> = {
           case 'enemy_bullet':
           default:
             // Default enemy bullet - red glowing orb
-            ctx.shadowBlur = 12;
+            ctx.shadowBlur = quality === 0 ? 12 : 0;
             ctx.shadowColor = '#ff0000';
             const defaultGrad = ctx.createRadialGradient(-2, -2, 0, 0, 0, 8);
             defaultGrad.addColorStop(0, '#ffaaaa');
@@ -10328,7 +10205,7 @@ const BULLET_IMPACT_PROFILES: Record<string, BulletImpactProfile> = {
     }
     function drawHUD() {
       ctx.save();
-      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.setTransform(sceneScale, 0, 0, sceneScale, 0, 0);
       const w = canvas.clientWidth;
       const h = canvas.clientHeight;
       const showHelp = !!helpRef.current;
@@ -10447,7 +10324,7 @@ const BULLET_IMPACT_PROFILES: Record<string, BulletImpactProfile> = {
         ctx.lineWidth = isActive ? 2 : 1.1;
         if (isActive) {
           ctx.shadowColor = HUD_MONO_THEME.glow;
-          ctx.shadowBlur = 14;
+          ctx.shadowBlur = quality === 0 ? 14 : 0;
         }
         drawRoundedRect(x, y, bubbleWidth, bubbleHeight, 14);
         ctx.stroke();
@@ -10560,7 +10437,7 @@ const BULLET_IMPACT_PROFILES: Record<string, BulletImpactProfile> = {
         ctx.strokeStyle = HUD_MONO_THEME.borderStrong;
           ctx.lineWidth = 2;
         ctx.shadowColor = HUD_MONO_THEME.glow;
-        ctx.shadowBlur = 18;
+        ctx.shadowBlur = quality === 0 ? 18 : 0;
         drawRoundedRect(panelX, panelY, panelWidth, panelHeight, 16);
       ctx.stroke();
         ctx.shadowBlur = 0;
@@ -10601,7 +10478,7 @@ const BULLET_IMPACT_PROFILES: Record<string, BulletImpactProfile> = {
           ctx.lineWidth = isActive ? 3 : 2;
           if (isActive) {
             ctx.shadowColor = HUD_MONO_THEME.glow;
-            ctx.shadowBlur = 20;
+            ctx.shadowBlur = quality === 0 ? 20 : 0;
           }
           drawRoundedRect(x, y, meleeButtonSize, meleeButtonSize, 10);
         ctx.stroke();
@@ -10665,7 +10542,7 @@ const BULLET_IMPACT_PROFILES: Record<string, BulletImpactProfile> = {
         ctx.strokeStyle = `${hl}55`;
         ctx.lineWidth = 2;
         ctx.shadowColor = `${hl}88`;
-        ctx.shadowBlur = 22;
+        ctx.shadowBlur = quality === 0 ? 22 : 0;
         drawRoundedRect(weaponPanelX, weaponPanelY, weaponPanelWidth, weaponPanelHeight, 18);
         ctx.stroke();
         ctx.shadowBlur = 0;
@@ -10693,7 +10570,7 @@ const BULLET_IMPACT_PROFILES: Record<string, BulletImpactProfile> = {
         ctx.textAlign = 'right';
         ctx.textBaseline = 'top';
         ctx.shadowColor = `${hl}aa`;
-        ctx.shadowBlur = 18;
+        ctx.shadowBlur = quality === 0 ? 18 : 0;
         ctx.fillStyle = HUD_MONO_THEME.foreground;
         ctx.fillText(weaponEmoji, weaponPanelX + weaponPanelWidth - 28, weaponPanelY + 14);
         ctx.shadowBlur = 0;
@@ -10721,7 +10598,7 @@ const BULLET_IMPACT_PROFILES: Record<string, BulletImpactProfile> = {
         ctx.strokeStyle = isLowAmmo ? HUD_MONO_THEME.warning : hl;
         ctx.lineWidth = 3;
         ctx.shadowColor = isLowAmmo ? HUD_MONO_THEME.warningGlow : hl;
-        ctx.shadowBlur = isLowAmmo ? 28 : 18;
+        ctx.shadowBlur = quality === 0 ? isLowAmmo ? 28 : 18 : 0;
         drawRoundedRect(ammoCapsuleX, ammoCapsuleY, ammoCapsuleWidth, ammoCapsuleHeight, 22);
         ctx.stroke();
         ctx.shadowBlur = 0;
@@ -10767,7 +10644,7 @@ const BULLET_IMPACT_PROFILES: Record<string, BulletImpactProfile> = {
       if (player.weapons.length === 0) return;
       
       ctx.save();
-      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.setTransform(sceneScale, 0, 0, sceneScale, 0, 0);
       const w = canvas.clientWidth;
       const h = canvas.clientHeight;
       
@@ -10843,7 +10720,7 @@ const BULLET_IMPACT_PROFILES: Record<string, BulletImpactProfile> = {
         // Glow for hovered/current
         if (hovered || isCurrent) {
           ctx.shadowColor = isCurrent ? HUD_MONO_THEME.glow : HUD_MONO_THEME.borderSoft;
-          ctx.shadowBlur = 12;
+          ctx.shadowBlur = quality === 0 ? 12 : 0;
           ctx.stroke();
           ctx.shadowBlur = 0;
         }
@@ -10861,11 +10738,11 @@ const BULLET_IMPACT_PROFILES: Record<string, BulletImpactProfile> = {
         if (isCurrent) {
           ctx.fillStyle = '#000000';
           ctx.shadowColor = 'rgba(0,0,0,0.8)';
-          ctx.shadowBlur = 4;
+          ctx.shadowBlur = quality === 0 ? 4 : 0;
         } else if (hovered) {
           ctx.fillStyle = HUD_MONO_THEME.foreground;
           ctx.shadowColor = HUD_MONO_THEME.glow;
-          ctx.shadowBlur = 6;
+          ctx.shadowBlur = quality === 0 ? 6 : 0;
         } else {
           ctx.fillStyle = HUD_MONO_THEME.accentMuted;
           ctx.shadowBlur = 0;
@@ -10883,7 +10760,7 @@ const BULLET_IMPACT_PROFILES: Record<string, BulletImpactProfile> = {
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
         ctx.shadowColor = 'rgba(255,100,0,1)';
-        ctx.shadowBlur = 10;
+        ctx.shadowBlur = quality === 0 ? 10 : 0;
         ctx.fillText(currentWeapon.type.toUpperCase(), cx, cy);
       ctx.shadowBlur = 0;
       }
@@ -10894,7 +10771,7 @@ const BULLET_IMPACT_PROFILES: Record<string, BulletImpactProfile> = {
       ctx.save();
       if (glow) { 
         ctx.shadowColor = 'rgba(255,0,0,1)'; 
-        ctx.shadowBlur = 18; 
+        ctx.shadowBlur = quality === 0 ? 18 : 0;
       }
       drawEmojiSprite(WEAPON_EMOJI[type], x, y, glow ? 44 : 36, HUD_MONO_THEME.foreground);
       ctx.shadowBlur = 0; 
@@ -10903,7 +10780,7 @@ const BULLET_IMPACT_PROFILES: Record<string, BulletImpactProfile> = {
     function drawIntroOverlay() {
       if (startedRef.current) return;
       ctx.save();
-      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.setTransform(sceneScale, 0, 0, sceneScale, 0, 0);
       const width = canvas.clientWidth;
       const height = canvas.clientHeight;
       ctx.fillStyle = "rgba(0,0,0,0.25)";
@@ -10915,7 +10792,7 @@ const BULLET_IMPACT_PROFILES: Record<string, BulletImpactProfile> = {
       if (!startedRef.current) return;
       if (runningRef.current) return;
       ctx.save();
-      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.setTransform(sceneScale, 0, 0, sceneScale, 0, 0);
       const width = canvas.clientWidth;
       const height = canvas.clientHeight;
       
@@ -10988,7 +10865,7 @@ const BULLET_IMPACT_PROFILES: Record<string, BulletImpactProfile> = {
       ctx.fillText(isGameOver ? "GAME OVER" : "PAUSED", width / 2, frameY + 80);
       // Glow
       ctx.shadowColor = 'rgba(255,0,0,0.8)';
-      ctx.shadowBlur = 20;
+      ctx.shadowBlur = quality === 0 ? 20 : 0;
       ctx.fillText(isGameOver ? "GAME OVER" : "PAUSED", width / 2, frameY + 80);
       ctx.shadowBlur = 0;
       
@@ -11045,7 +10922,7 @@ const BULLET_IMPACT_PROFILES: Record<string, BulletImpactProfile> = {
           const hostPulse = 0.7 + 0.3 * Math.sin(Date.now() * 0.004);
           ctx.globalAlpha = hostPulse;
           ctx.shadowColor = 'rgba(255,100,0,0.8)';
-          ctx.shadowBlur = 15;
+          ctx.shadowBlur = quality === 0 ? 15 : 0;
           ctx.fillStyle = "#ff6600";
           ctx.fillText("PRESS ESC TO END MATCH", width / 2, instructY + lineSpacing * 2.7);
           ctx.shadowBlur = 0;
@@ -11065,6 +10942,43 @@ const BULLET_IMPACT_PROFILES: Record<string, BulletImpactProfile> = {
     rafId = requestAnimationFrame(step);
     // ========== Local helpers referencing closures above ==========
 
+    function initializeArena() {
+      const map = currentMapRef.current;
+      metropolisState = map.id === 'city-platformer' ? MetropolisMap.initMetropolisState() : null;
+      suburbiaState = map.id === 'suburban-day' ? SuburbiaMap.initializeSuburbiaState() : null;
+      rooftopsState = map.id === 'rooftop-sunset' ? RooftopsMap.initRooftopsState() : null;
+      platformCacheMapId = map.id;
+      platformChunkCache.clear();
+      chunkPlatformMap.clear();
+      clearPlatformRenderCache();
+      platforms.length = 0;
+      placeFighterAtSpawn(player, getLocalSpawnIndex());
+      (player as any).lastPlatformCheckX = undefined;
+      camera.x = player.position.x - canvas.clientWidth * 0.5;
+      camera.y = player.position.y - canvas.clientHeight * 0.5;
+    }
+
+    function getLocalSpawnIndex() {
+      return Math.max(0, multiplayerStateRef.current.connectedPlayers.findIndex(
+        member => member.clientId === localPlayerId.current));
+    }
+
+    function placeFighterAtSpawn(fighter: Character, index: number) {
+      const map = currentMapRef.current;
+      const points = map.spawnPoints;
+      const spot = points?.length ? points[index % points.length] : undefined;
+      const x = spot?.x ?? SPAWN_OFFSET_X;
+      ensurePlatformsAround(x);
+      const surface = platforms.find(p => p.x <= x && p.x + p.width >= x &&
+        (map.id !== 'rooftop-sunset' || p.isRooftop));
+      fighter.position.x = x;
+      fighter.position.y = (map.id === 'rooftop-sunset' ? surface?.y : spot?.y) ??
+        surface?.y ?? groundYAt(x);
+      fighter.position.y -= fighter.radius + 2;
+      fighter.velocity.x = fighter.velocity.y = 0;
+      fighter.onGround = false;
+    }
+
     function spawnMatchBots() {
       const bounds = currentMapRef.current.boundaries;
       for (const [index, name] of (gameConfigRef.current.bots ?? []).entries()) {
@@ -11072,6 +10986,9 @@ const BULLET_IMPACT_PROFILES: Record<string, BulletImpactProfile> = {
         const x = player.position.x + offset;
         const spawnX = bounds ? Math.max(bounds.left + 24, Math.min(bounds.right - 24, x)) : x;
         spawnEnemyAtPosition(spawnX, 'duelist', name);
+        if (currentMapRef.current.id === 'rooftop-sunset') {
+          placeFighterAtSpawn(enemies[enemies.length - 1], index + 1);
+        }
       }
     }
 
@@ -11083,15 +11000,11 @@ const BULLET_IMPACT_PROFILES: Record<string, BulletImpactProfile> = {
           const selectedMap = getMapById(cfg.mapId);
           if (selectedMap) {
             currentMapRef.current = selectedMap;
-            platformCacheMapId = selectedMap.id;
-            platformChunkCache.clear();
-            chunkPlatformMap.clear();
-            clearPlatformRenderCache();
-            platforms.length = 0;
           }
         }
       }
       enemies.length = 0;
+      initializeArena();
       spawnMatchBots();
       startedRef.current = true;
       runningRef.current = true;
@@ -11193,9 +11106,6 @@ const BULLET_IMPACT_PROFILES: Record<string, BulletImpactProfile> = {
     }
     
     function restartGame() {
-      // Reset player state with spawn offset to avoid rendering bug
-      player.position.x = SPAWN_OFFSET_X;
-      player.position.y = groundYAt(SPAWN_OFFSET_X) - player.radius - 2;
       player.velocity.x = 0;
       player.velocity.y = 0;
       player.hp = diffMul.playerMaxHp;
@@ -11237,11 +11147,6 @@ const BULLET_IMPACT_PROFILES: Record<string, BulletImpactProfile> = {
       particles.length = 0;
       pickups.length = 0;
       floatingTexts.length = 0;
-      platforms.length = 0;
-      platformChunkCache.clear();
-      chunkPlatformMap.clear();
-      clearPlatformRenderCache();
-      platformCacheMapId = currentMapRef.current.id;
       shockwaves.length = 0;
       railBeams.length = 0;
       scorchDecals.length = 0;
@@ -11249,14 +11154,11 @@ const BULLET_IMPACT_PROFILES: Record<string, BulletImpactProfile> = {
       casings.length = 0;
       afterimages.length = 0;
       lightningArcs.length = 0;
-      // Reset camera (offset to match spawn position)
-      camera.x = 1720;
-      camera.y = 0;
       cameraShake.ms = 0;
       cameraShake.magnitude = 0;
 
       // Regenerate initial platforms and opponents
-      ensurePlatformsAround(player.position.x);
+      initializeArena();
       spawnMatchBots();
 
       // Resume game
@@ -11335,6 +11237,9 @@ const BULLET_IMPACT_PROFILES: Record<string, BulletImpactProfile> = {
     document.addEventListener("visibilitychange", visHandler);
 
     return () => {
+      animationLoadingDisposed = true;
+      spriteRequest.abort();
+      platformCacheManager.clear();
       window.removeEventListener("resize", resize);
       window.removeEventListener("keydown", keyDown);
       window.removeEventListener("keyup", keyUp);
@@ -11799,8 +11704,7 @@ const BULLET_IMPACT_PROFILES: Record<string, BulletImpactProfile> = {
             left: 0,
             right: 0,
             bottom: 0,
-            backdropFilter: `blur(${INTRO_CONFIG.backdropBlur}px) brightness(${INTRO_CONFIG.backdropBrightness})`,
-            WebkitBackdropFilter: `blur(${INTRO_CONFIG.backdropBlur}px) brightness(${INTRO_CONFIG.backdropBrightness})`,
+            backgroundColor: 'rgba(0, 0, 0, 0.7)',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
@@ -11808,22 +11712,6 @@ const BULLET_IMPACT_PROFILES: Record<string, BulletImpactProfile> = {
             animation: `cinematicIntro ${INTRO_CONFIG.duration}ms ease-in-out forwards`,
           }}
         >
-          {/* Film grain overlay */}
-          <div
-            style={{
-              position: 'absolute',
-              top: 0,
-              left: 0,
-              right: 0,
-              bottom: 0,
-              background: `url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' /%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)' opacity='${INTRO_CONFIG.filmGrainOpacity}'/%3E%3C/svg%3E")`,
-              animation: 'filmGrain 0.3s infinite',
-              pointerEvents: 'none',
-              zIndex: 10001,
-              mixBlendMode: 'multiply',
-            }}
-          />
-          
           {/* Vignette effect for extra cinematic feel */}
           <div
             style={{
@@ -12682,7 +12570,7 @@ const BULLET_IMPACT_PROFILES: Record<string, BulletImpactProfile> = {
               background: ui.overdriveMs > 0 
                 ? 'rgba(255,200,0,0.15)' 
                 : 'rgba(255,100,0,0.15)',
-              backdropFilter: 'blur(8px)',
+
               border: '3px solid ' + (ui.overdriveMs > 0 ? '#ffcc00' : '#ff8800'),
               borderRadius: 6,
               color: ui.overdriveMs > 0 ? '#ffff00' : '#ffaa44', 
@@ -12724,7 +12612,7 @@ const BULLET_IMPACT_PROFILES: Record<string, BulletImpactProfile> = {
               className="matrix-button pixel hud-action-button" 
               style={{ 
                 background: 'rgba(0,0,0,0.75)', 
-                backdropFilter: 'blur(4px)',
+
                 border: '2px solid rgba(200,200,200,0.6)', 
                 borderRadius: 4,
                 color: '#ffffff', 
@@ -12764,7 +12652,7 @@ const BULLET_IMPACT_PROFILES: Record<string, BulletImpactProfile> = {
               className="matrix-button pixel hud-action-button" 
               style={{ 
                 background: 'rgba(0,0,0,0.75)', 
-                backdropFilter: 'blur(4px)',
+
                 border: '2px solid rgba(200,200,200,0.6)', 
                 borderRadius: 4,
                 color: '#ffffff', 
@@ -12799,7 +12687,7 @@ const BULLET_IMPACT_PROFILES: Record<string, BulletImpactProfile> = {
               right: 20,
               transform: 'translateY(-50%)',
               background: 'rgba(0,0,0,0.9)',
-              backdropFilter: 'blur(10px)',
+
               border: '2px solid rgba(255,255,255,0.3)',
               borderRadius: 8,
               padding: '20px',

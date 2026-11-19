@@ -39,8 +39,12 @@ for (const entry of await readdir(site, { recursive: true, withFileTypes: true }
   if (!entry.isFile() || !entry.name.endsWith('.png')) continue;
   const source = join(entry.parentPath, entry.name);
   const original = await readFile(source);
-  const packed = await sharp(original).webp({ lossless: true, effort: 5 }).toBuffer();
-  const before = await sharp(original).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
+  const prepared = sharp(original);
+  if (source.startsWith(fileURLToPath(new URL('models/', site)))) {
+    prepared.resize(621, 544, { fit: 'fill' });
+  }
+  const packed = await prepared.clone().webp({ lossless: true, effort: 5 }).toBuffer();
+  const before = await prepared.ensureAlpha().raw().toBuffer({ resolveWithObject: true });
   const after = await sharp(packed).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
   if (before.info.width !== after.info.width || before.info.height !== after.info.height || before.info.channels !== 4 || after.info.channels !== 4) {
     throw new Error(`Packed image dimensions or channels changed: ${entry.name}`);

@@ -31,7 +31,7 @@ export interface RooftopsState {
 
 // Module-level cache for cityscape chunk rendering
 const cityscapeCache: Record<'far' | 'mid' | 'near', { 
-  chunks: Map<number, { canvas: HTMLCanvasElement; timeBucket: number; offsetBase: number }>;
+  chunks: Map<number, { canvas: HTMLCanvasElement; height: number; offsetBase: number }>;
 }> = {
   far: { chunks: new Map() },
   mid: { chunks: new Map() },
@@ -648,7 +648,6 @@ export function drawRooftopSun(
   const sunRadius = 80;
   
   ctx.save();
-  ctx.setTransform(1, 0, 0, 1, 0, 0); // Reset transform for screen-space rendering
   
   // Windows Classic grayscale glow layers (largest to smallest)
   const glowLayers = [
@@ -730,7 +729,6 @@ export function drawRooftopClouds(
   const h = canvas.clientHeight;
   
   ctx.save();
-  ctx.setTransform(1, 0, 0, 1, 0, 0); // Reset transform for screen-space rendering
   
   // Sunset-specific clouds with Windows Classic grayscale layering
   const cloudLayers = [
@@ -806,7 +804,6 @@ export function drawRooftopAtmosphericEffects(
   const h = canvas.clientHeight;
   
   ctx.save();
-  ctx.setTransform(1, 0, 0, 1, 0, 0); // Reset transform for screen-space rendering
   
   // Atmospheric haze gradient - shifted to match background positioning
   const backgroundShift = -400; // Match the sky gradient shift
@@ -851,7 +848,6 @@ export function drawNYCEnvironmentalElements(
   const h = canvas.clientHeight;
   
   ctx.save();
-  ctx.setTransform(1, 0, 0, 1, 0, 0); // Screen-space rendering
   
   // Flying birds in formation
   const birdCount = 8;
@@ -972,7 +968,6 @@ export function drawRooftopCityscape(
     height: { min: number; max: number };
     width: { min: number; max: number };
     alpha: number;
-    timeSliceMs: number;
     palette: {
       top: string;
       bottom: string;
@@ -1016,7 +1011,6 @@ export function drawRooftopCityscape(
       height: { min: 180, max: 520 },
       width: { min: 90, max: 180 },
       alpha: 0.55,
-      timeSliceMs: 3200,
       palette: {
         top: 'rgba(100,100,100,0.75)', // --neutral-grayscale
         bottom: 'rgba(70,70,70,0.92)', // --neutral-grayscale
@@ -1056,7 +1050,6 @@ export function drawRooftopCityscape(
       height: { min: 240, max: 620 },
       width: { min: 110, max: 220 },
       alpha: 0.72,
-      timeSliceMs: 2600,
       palette: {
         top: 'rgba(58,58,58,0.82)', // --neutral-500
         bottom: 'rgba(16,16,16,0.95)', // Dark gray
@@ -1096,7 +1089,6 @@ export function drawRooftopCityscape(
       height: { min: 500, max: 650 }, // Taller, more imposing skyscrapers
       width: { min: 500, max: 800 }, // Much wider buildings for detailed architecture
       alpha: 1.0, // Full visibility for rooftop map
-      timeSliceMs: 2100,
       palette: {
         top: 'rgba(90,90,90,0.95)', // --neutral-300 grayscale
         bottom: 'rgba(55,55,55,0.98)', // --neutral-500 grayscale
@@ -1128,8 +1120,6 @@ export function drawRooftopCityscape(
     }
   ];
 
-  const timeMs = totalTimeMs;
-
   for (const layer of layerConfigs) {
     // For rooftop-sunset, only render the 'near' layer (the platforms)
     if (isRooftopSunset && layer.id !== 'near') continue;
@@ -1139,7 +1129,7 @@ export function drawRooftopCityscape(
   function renderCityLayer(cfg: CityLayerConfig) {
     const offsetX = camera.x * cfg.parallax;
     const chunkWidth = cfg.spacing * cfg.chunkSpan;
-    const timeBucket = Math.floor(timeMs / cfg.timeSliceMs);
+    const timeBucket = 0; // Cache distant building art. Foreground atmosphere still animates.
     const margin = cfg.spacing * cfg.marginSpan;
     const cache = cityscapeCache[cfg.id];
     
@@ -1150,11 +1140,8 @@ export function drawRooftopCityscape(
     const lastChunk = Math.floor(viewEnd / chunkWidth);
     
     // Clean up old chunks (keep only last 5)
-    const activeChunks = Array.from(cache.chunks.keys()).sort((a, b) => b - a);
-    if (activeChunks.length > 5) {
-      for (let i = 5; i < activeChunks.length; i++) {
-        cache.chunks.delete(activeChunks[i]);
-      }
+    for (const key of cache.chunks.keys()) {
+      if (key < firstChunk - 1 || key > lastChunk + 1) cache.chunks.delete(key);
     }
     
     // Process and render each visible chunk
@@ -1162,18 +1149,18 @@ export function drawRooftopCityscape(
       let chunkData = cache.chunks.get(chunkIndex);
       
       // Check if we need to create/update this chunk
-      if (!chunkData || chunkData.timeBucket !== timeBucket || 
-          !chunkData.canvas || chunkData.canvas.width <= 0 || chunkData.canvas.height <= 0) {
+      if (!chunkData ||
+          !chunkData.canvas || chunkData.canvas.width <= 0 || chunkData.height !== screenH) {
         
         const offWidth = chunkWidth + margin * 2;
         const offscreen = document.createElement('canvas');
-        offscreen.width = offWidth;
-        offscreen.height = screenH;
+        offscreen.width = Math.ceil(offWidth / 2);
+        offscreen.height = Math.ceil(screenH / 2);
         const offCtx = offscreen.getContext('2d', { alpha: true, willReadFrequently: false });
         
         if (offCtx) {
           // Ensure canvas starts fully transparent
-          offCtx.clearRect(0, 0, offWidth, screenH);
+          offCtx.setTransform(0.5, 0, 0, 0.5, 0, 0);
           offCtx.globalCompositeOperation = 'source-over';
           const chunkStart = chunkIndex * chunkWidth;
           const offsetBase = chunkStart - margin;
@@ -1390,7 +1377,7 @@ export function drawRooftopCityscape(
           // Store in cache
           chunkData = {
             canvas: offscreen,
-            timeBucket: timeBucket,
+            height: screenH,
             offsetBase: offsetBase
           };
           cache.chunks.set(chunkIndex, chunkData);
@@ -1403,12 +1390,13 @@ export function drawRooftopCityscape(
       // Render this chunk
       if (chunkData && chunkData.canvas && chunkData.canvas.width > 0 && chunkData.canvas.height > 0) {
         ctx.save();
-        ctx.setTransform(1, 0, 0, 1, 0, 0);
         ctx.globalAlpha = cfg.alpha;
         const drawX = chunkData.offsetBase - offsetX;
         // Only draw if the chunk is actually visible on screen
-        if (drawX < screenW && drawX + chunkData.canvas.width > 0) {
-          ctx.drawImage(chunkData.canvas, drawX, 0);
+        if (drawX < screenW && drawX + chunkData.canvas.width * 2 > 0) {
+          const sourceX = Math.max(0, Math.floor(-drawX));
+        const drawWidth = Math.min(chunkData.canvas.width * 2 - sourceX, Math.ceil(screenW - drawX - sourceX));
+        if (drawWidth > 0) ctx.drawImage(chunkData.canvas, sourceX / 2, 0, drawWidth / 2, screenH / 2, drawX + sourceX, 0, drawWidth, screenH);
         }
         ctx.restore();
       }

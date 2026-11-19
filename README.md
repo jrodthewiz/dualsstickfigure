@@ -22,7 +22,7 @@ npm start
 
 `npm run build:hub` packages the prerendered game and assets under `build/site/stickfigure/`. The Hub Worker serves `index.html` for `/stickfigure/`. The rest of that directory goes into the Hub's static assets at the same prefix.
 
-The Hub build uses lossless WebP for sprites and match-intro art. The build checks image dimensions, alpha, and every visible pixel after encoding.
+The Hub build packages gameplay sprites at 621×544 and retains the original sprite files in source. Match-intro art keeps its source dimensions. The WebP encode is lossless from the prepared image, with dimensions, alpha, and visible pixels verified after encoding.
 
 Apply [the room migration](integration/stickfigure-rooms.sql) to the Hub's existing D1 database. Copy [the Worker route adapter](integration/stickfigure-room-worker.mjs) and its [room server module](app/utils/roomServer.mjs) into the Hub source. In the Hub Worker's fetch handler, call `routeStickfigureRoom(request, env.DB)` before routing static assets, using the actual Hub D1 binding in place of `DB`. Return its result when it handles the request. The adapter handles `POST /stickfigure/api/multiplayer-room/` with or without the trailing slash.
 
@@ -35,6 +35,8 @@ Use the existing JRod Hub Site (`appgprj_6ac2e378ab00819189d0aa31f0db5147`) and 
 Run `npm run build:hub` followed by `node scripts/preview-hub.mjs` on Node 24 or newer. Open `http://127.0.0.1:3104/stickfigure/`. The preview serves the actual static build and uses the same Worker callback, schema, and queries with local SQLite. Production durability and routing require a deployed Hub Worker and its D1 binding.
 
 With Chromium installed, run `npm run smoke:hub` while the preview is running. It verifies software rasterization and completes the two-player flow. Use `npm run smoke:hub -- --force-relay` to exercise the relay by disabling WebRTC in the test browser. Use `npm run smoke:hub -- --require-direct` on an unrestricted network to require gameplay over a WebRTC DataChannel. Set `GAME_URL` or `CHROMIUM_PATH` if your preview URL or Chromium executable differs.
+
+For a software-rendered frame-time run, start the Hub preview and run `node scripts/perf-cloud.mjs`. It exercises three solo bots and two connected clients on each map. Use `--require-60` to require at least 59.5 measured FPS and a p95 frame interval of at most 20 ms. Set `GAME_URL`, `SAMPLE_SECONDS`, `VIEWPORT_WIDTH`, `VIEWPORT_HEIGHT`, or `DPR` to reproduce a target environment.
 
 ## Game Controls
 

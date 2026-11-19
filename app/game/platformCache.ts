@@ -43,8 +43,10 @@ type Platform = {
   // Add any other properties that might be used
 };
 
+type PlatformImage = ImageBitmap | HTMLCanvasElement;
+
 export class PlatformCacheManager {
-  private cache: Map<string, ImageBitmap>;
+  private cache: Map<string, PlatformImage>;
   private maxCacheSize: number;
   private cacheHits: number;
   private cacheMisses: number;
@@ -71,7 +73,7 @@ export class PlatformCacheManager {
   /**
    * Get cached platform image if it exists
    */
-  get(key: string): ImageBitmap | null {
+  get(key: string): PlatformImage | null {
     const cached = this.cache.get(key);
     if (cached) {
       this.cacheHits++;
@@ -84,11 +86,13 @@ export class PlatformCacheManager {
   /**
    * Store a rendered platform in cache
    */
-  set(key: string, bitmap: ImageBitmap): void {
+  set(key: string, bitmap: PlatformImage): void {
     // Implement simple LRU by deleting oldest when at capacity
     if (this.cache.size >= this.maxCacheSize && !this.cache.has(key)) {
       const firstKey = this.cache.keys().next().value;
       if (firstKey) {
+        const evicted = this.cache.get(firstKey);
+        if (evicted && 'close' in evicted) evicted.close();
         this.cache.delete(firstKey);
       }
     }
@@ -100,6 +104,7 @@ export class PlatformCacheManager {
    * Clear all cached platforms (call on map change)
    */
   clear(): void {
+    for (const item of this.cache.values()) if ('close' in item) item.close();
     this.cache.clear();
     this.cacheHits = 0;
     this.cacheMisses = 0;
@@ -153,19 +158,3 @@ export function createOffscreenCanvas(width: number, height: number): {
   }
   return { canvas, ctx };
 }
-
-/**
- * Convert canvas to ImageBitmap for fast drawing
- */
-export async function canvasToImageBitmap(
-  canvas: OffscreenCanvas | HTMLCanvasElement
-): Promise<ImageBitmap> {
-  if (typeof createImageBitmap !== 'undefined') {
-    return await createImageBitmap(canvas);
-  }
-  
-  // Fallback: return canvas as-is if ImageBitmap not supported
-  // TypeScript will complain, but at runtime this still works
-  return canvas as any as ImageBitmap;
-}
-

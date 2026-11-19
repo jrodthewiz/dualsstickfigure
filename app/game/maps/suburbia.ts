@@ -136,8 +136,10 @@ export function drawNeighborhoodHouses(
   canvas: HTMLCanvasElement,
   totalTimeMs?: number
 ): void {
-  // SIMPLIFIED: Just draw ALL houses - let the canvas handle culling
+  const left = camera.x - 160;
+  const right = camera.x + canvas.clientWidth + 160;
   suburbiaState.neighborhood.houses.forEach((house, index) => {
+    if (house.x + house.width < left || house.x > right) return;
     drawNeighborhoodHouse(ctx, house, index, totalTimeMs);
   });
 }
@@ -151,8 +153,10 @@ export function drawStreetTacticalElements(
   camera: { x: number; y: number },
   canvas: HTMLCanvasElement
 ): void {
-  // SIMPLIFIED: Just draw ALL street elements
+  const left = camera.x - 160;
+  const right = camera.x + canvas.clientWidth + 160;
   suburbiaState.streetPlatforms.forEach(element => {
+    if (element.x + element.width < left || element.x > right) return;
     
     ctx.save();
     
@@ -1250,7 +1254,6 @@ export function drawSuburbanSun(
   const sunRadius = 70;
   
   ctx.save();
-  ctx.setTransform(1, 0, 0, 1, 0, 0); // Reset transform for screen-space rendering
   
   // Subtle sun glow - FIXED: Much more subtle to prevent blown-out appearance
   const glowLayers = [
@@ -1460,7 +1463,6 @@ export function drawSuburbanClouds(
   const h = canvas.clientHeight;
   
   ctx.save();
-  ctx.setTransform(1, 0, 0, 1, 0, 0); // Reset transform for screen-space rendering
   
   // Suburban clouds - fluffy, white, cheerful daytime clouds (grayscale)
   const cloudLayers = [
@@ -1552,7 +1554,6 @@ export function drawSuburbanAtmosphericEffects(
   const h = canvas.clientHeight;
   
   ctx.save();
-  ctx.setTransform(1, 0, 0, 1, 0, 0); // Reset transform for screen-space rendering
   
   // PERFORMANCE: Simplified kites - reduced from 4 to 2, removed complex animations
   const kiteCount = 2; // Reduced count

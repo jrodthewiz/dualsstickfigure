@@ -731,7 +731,7 @@ export function drawCityStreetDecor(
 // Cache for cityscape chunks
 interface CityChunkData {
   canvas: HTMLCanvasElement;
-  timeBucket: number;
+  height: number;
   offsetBase: number;
 }
 
@@ -752,7 +752,7 @@ export function drawMetropolisCityscape(
   ctx: CanvasRenderingContext2D,
   camera: Camera,
   canvas: HTMLCanvasElement,
-  totalTimeMs: number,
+  _totalTimeMs: number,
   visualSettings: { skyline: boolean }
 ): void {
   if (!visualSettings.skyline) return;
@@ -768,7 +768,6 @@ export function drawMetropolisCityscape(
     height: { min: number; max: number };
     width: { min: number; max: number };
     alpha: number;
-    timeSliceMs: number;
     palette: {
       top: string;
       bottom: string;
@@ -813,7 +812,6 @@ export function drawMetropolisCityscape(
       height: { min: 180, max: 520 },
       width: { min: 90, max: 180 },
       alpha: 0.55,
-      timeSliceMs: 3200,
       palette: {
         top: 'rgba(58,58,58,0.75)', // --neutral-700 (#3a3a3a)
         bottom: 'rgba(10,10,10,0.92)', // --neutral-900
@@ -853,7 +851,6 @@ export function drawMetropolisCityscape(
       height: { min: 240, max: 620 },
       width: { min: 110, max: 220 },
       alpha: 0.72,
-      timeSliceMs: 2600,
       palette: {
         top: 'rgba(74,74,74,0.82)', // --neutral-600 (#4a4a4a)
         bottom: 'rgba(10,10,10,0.95)', // --neutral-900
@@ -893,7 +890,6 @@ export function drawMetropolisCityscape(
       height: { min: 320, max: 720 },
       width: { min: 140, max: 260 },
       alpha: 0.85,
-      timeSliceMs: 2100,
       palette: {
         top: 'rgba(90,90,90,0.92)', // --neutral-500 (#5a5a5a)
         bottom: 'rgba(26,26,26,0.98)', // --neutral-850 (#1a1a1a)
@@ -926,22 +922,19 @@ export function drawMetropolisCityscape(
   ];
 
   for (const layer of layerConfigs) {
-    renderMetropolisCityLayer(ctx, camera, canvas, layer, totalTimeMs, screenW, screenH);
+    renderMetropolisCityLayer(ctx, camera, layer, screenW, screenH);
   }
 }
 
 function renderMetropolisCityLayer(
   ctx: CanvasRenderingContext2D,
   camera: Camera,
-  canvas: HTMLCanvasElement,
   cfg: any,
-  timeMs: number,
   screenW: number,
   screenH: number
 ): void {
   const offsetX = camera.x * cfg.parallax;
   const chunkWidth = cfg.spacing * cfg.chunkSpan;
-  const timeBucket = Math.floor(timeMs / cfg.timeSliceMs);
   const margin = cfg.spacing * cfg.marginSpan;
   const cache = metropolisCityscapeCache[cfg.id as 'far' | 'mid' | 'near'];
   
@@ -950,27 +943,24 @@ function renderMetropolisCityLayer(
   const firstChunk = Math.floor(viewStart / chunkWidth);
   const lastChunk = Math.floor(viewEnd / chunkWidth);
   
-  const activeChunks = Array.from(cache.chunks.keys()).sort((a, b) => b - a);
-  if (activeChunks.length > 5) {
-    for (let i = 5; i < activeChunks.length; i++) {
-      cache.chunks.delete(activeChunks[i]);
-    }
+  for (const key of cache.chunks.keys()) {
+    if (key < firstChunk - 1 || key > lastChunk + 1) cache.chunks.delete(key);
   }
   
   for (let chunkIndex = firstChunk; chunkIndex <= lastChunk; chunkIndex++) {
     let chunkData = cache.chunks.get(chunkIndex);
     
-    if (!chunkData || chunkData.timeBucket !== timeBucket || 
-        !chunkData.canvas || chunkData.canvas.width <= 0 || chunkData.canvas.height <= 0) {
+    if (!chunkData ||
+        !chunkData.canvas || chunkData.canvas.width <= 0 || chunkData.height !== screenH) {
       
       const offWidth = chunkWidth + margin * 2;
       const offscreen = document.createElement('canvas');
-      offscreen.width = offWidth;
-      offscreen.height = screenH;
+      offscreen.width = Math.ceil(offWidth / 2);
+      offscreen.height = Math.ceil(screenH / 2);
       const offCtx = offscreen.getContext('2d', { alpha: true, willReadFrequently: false });
       
       if (offCtx) {
-        offCtx.clearRect(0, 0, offWidth, screenH);
+        offCtx.setTransform(0.5, 0, 0, 0.5, 0, 0);
         offCtx.globalCompositeOperation = 'source-over';
         const chunkStart = chunkIndex * chunkWidth;
         const offsetBase = chunkStart - margin;
@@ -1123,7 +1113,7 @@ function renderMetropolisCityLayer(
 
         chunkData = {
           canvas: offscreen,
-          timeBucket: timeBucket,
+          height: screenH,
           offsetBase: offsetBase
         };
         cache.chunks.set(chunkIndex, chunkData);
@@ -1132,11 +1122,12 @@ function renderMetropolisCityLayer(
     
     if (chunkData && chunkData.canvas && chunkData.canvas.width > 0 && chunkData.canvas.height > 0) {
       ctx.save();
-      ctx.setTransform(1, 0, 0, 1, 0, 0);
       ctx.globalAlpha = cfg.alpha;
       const drawX = chunkData.offsetBase - offsetX;
-      if (drawX < screenW && drawX + chunkData.canvas.width > 0) {
-        ctx.drawImage(chunkData.canvas, drawX, 0);
+      if (drawX < screenW && drawX + chunkData.canvas.width * 2 > 0) {
+        const sourceX = Math.max(0, Math.floor(-drawX));
+        const drawWidth = Math.min(chunkData.canvas.width * 2 - sourceX, Math.ceil(screenW - drawX - sourceX));
+        if (drawWidth > 0) ctx.drawImage(chunkData.canvas, sourceX / 2, 0, drawWidth / 2, screenH / 2, drawX + sourceX, 0, drawWidth, screenH);
       }
       ctx.restore();
     }
@@ -1229,7 +1220,6 @@ export function drawMetropolisFog(
   canvas: HTMLCanvasElement
 ): void {
   ctx.save();
-  ctx.setTransform(1, 0, 0, 1, 0, 0);
   const fog = ctx.createLinearGradient(0, canvas.clientHeight * 0.25, 0, canvas.clientHeight);
   fog.addColorStop(0, 'rgba(26,26,26,0)'); // --neutral-850 (transparent)
   fog.addColorStop(1, 'rgba(0,0,0,0.28)'); // --neutral-black
@@ -1278,7 +1268,6 @@ export function drawMetropolisClouds(
   const h = canvas.clientHeight;
   
   ctx.save();
-  ctx.setTransform(1, 0, 0, 1, 0, 0); // Reset transform for screen-space rendering
   
   // Dark grayscale clouds for night city
   const rows = 3;
