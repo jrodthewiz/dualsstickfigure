@@ -1370,7 +1370,8 @@ useEffect(() => {
   const [autoLobbyReady, setAutoLobbyReady] = useState(false);
   const [matchStocks, setMatchStocks] = useState(3);
   const [matchTimeLimit, setMatchTimeLimit] = useState(0); // 0 = no limit
-  const gameConfigRef = useRef({ difficulty: 'Normal' as 'Easy'|'Normal'|'Hard', mode: 'Infinite' as 'Infinite'|'PvP' });
+  type MatchConfig = { difficulty: 'Easy' | 'Normal' | 'Hard'; mode: 'Infinite' | 'PvP'; mapId?: string; bots?: string[] };
+  const gameConfigRef = useRef<MatchConfig>({ difficulty: 'Normal', mode: 'Infinite' });
   const currentMapRef = useRef(AVAILABLE_MAPS[0]);
 
   // Visitors without an invite get a room they can share from the main menu.
@@ -4305,7 +4306,7 @@ const BULLET_IMPACT_PROFILES: Record<string, BulletImpactProfile> = {
       };
       enemies.push(enemy);
     }
-    function spawnEnemyAtPosition(x: number, forceType?: EnemyType) {
+    function spawnEnemyAtPosition(x: number, forceType?: EnemyType, name?: string) {
       const type: EnemyType = forceType || "grunt";
       const gy = groundYAt(x);
       const radius = type === "brute" ? 28 : type === "boss" ? 40 : type === "duelist" ? 24 : 22;
@@ -4315,7 +4316,7 @@ const BULLET_IMPACT_PROFILES: Record<string, BulletImpactProfile> = {
       
       const enemy: Enemy = {
         id: nextEnemyId++,
-        name: type === "boss" ? "OVERSEER" : type === "duelist" ? "RIVAL" : ENEMY_NAMES[Math.floor(Math.random() * ENEMY_NAMES.length)],
+        name: name ?? (type === "boss" ? "OVERSEER" : type === "duelist" ? "RIVAL" : ENEMY_NAMES[Math.floor(Math.random() * ENEMY_NAMES.length)]),
         position: { x, y: gy - radius - 2 },
         velocity: { x: 0, y: 0 },
         radius,
@@ -6841,8 +6842,7 @@ const BULLET_IMPACT_PROFILES: Record<string, BulletImpactProfile> = {
       eDot.update(dt);
       // AI Input Simulation - Simplified Aggressive AI
       function simulateAIInput(e: Enemy, dt: number) {
-        return;
-        if (!e.input) return;
+        if (!gameConfigRef.current.bots?.length || !e.input) return;
         const screenWidth = canvas && typeof canvas.width === 'number' ? canvas.width : (typeof window !== 'undefined' ? window.innerWidth || 1920 : 1920);
         const screenHeight = canvas && typeof canvas.height === 'number' ? canvas.height : (typeof window !== 'undefined' ? window.innerHeight || 1080 : 1080);
         const profile = getEnemyProfile(e.aiType!);
@@ -8067,6 +8067,12 @@ const BULLET_IMPACT_PROFILES: Record<string, BulletImpactProfile> = {
         (canvas as any)._ui = {
           hp: player.hp,
           maxHp: player.maxHp,
+          opponent: gameConfigRef.current.bots?.length && enemies[0] ? {
+            name: enemies[0].name,
+            x: enemies[0].position.x,
+            hp: enemies[0].hp,
+            action: enemies[0].animKey,
+          } : null,
           shield: playerShield,
           overdriveMs,
           combo,
@@ -11059,7 +11065,17 @@ const BULLET_IMPACT_PROFILES: Record<string, BulletImpactProfile> = {
     rafId = requestAnimationFrame(step);
     // ========== Local helpers referencing closures above ==========
 
-    function startGameWithName(name: string, cfg?: { difficulty: 'Easy'|'Normal'|'Hard'; mode: 'Infinite'|'PvP'; mapId?: string }) {
+    function spawnMatchBots() {
+      const bounds = currentMapRef.current.boundaries;
+      for (const [index, name] of (gameConfigRef.current.bots ?? []).entries()) {
+        const offset = (340 + Math.floor(index / 2) * 160) * (index % 2 ? -1 : 1);
+        const x = player.position.x + offset;
+        const spawnX = bounds ? Math.max(bounds.left + 24, Math.min(bounds.right - 24, x)) : x;
+        spawnEnemyAtPosition(spawnX, 'duelist', name);
+      }
+    }
+
+    function startGameWithName(name: string, cfg?: MatchConfig) {
       player.name = name || "Player";
       if (cfg) {
         gameConfigRef.current = cfg;
@@ -11075,6 +11091,8 @@ const BULLET_IMPACT_PROFILES: Record<string, BulletImpactProfile> = {
           }
         }
       }
+      enemies.length = 0;
+      spawnMatchBots();
       startedRef.current = true;
       runningRef.current = true;
       setIsPaused(false);
@@ -11237,8 +11255,9 @@ const BULLET_IMPACT_PROFILES: Record<string, BulletImpactProfile> = {
       cameraShake.ms = 0;
       cameraShake.magnitude = 0;
 
-      // Regenerate initial platforms
+      // Regenerate initial platforms and opponents
       ensurePlatformsAround(player.position.x);
+      spawnMatchBots();
 
       // Resume game
       runningRef.current = true;
@@ -11400,56 +11419,56 @@ const BULLET_IMPACT_PROFILES: Record<string, BulletImpactProfile> = {
     setGameStarted(false);
   }, [gameContext]);
 
-  const handleHostStartGame = useCallback(() => {
-    gameContext.hostStartGame();
-    const canvas = canvasRef.current as any;
-    if (canvas && canvas._startGameWithName) {
-      canvas._startGameWithName(playerName || "Player", { 
-        difficulty: 'Normal', 
-        mode: 'PvP',
-        mapId: gameContext.gameState.selectedMapId 
-      });
-    }
+  const startMatch = useCallback((name: string, bots: string[] = []) => {
+    (canvasRef.current as any)?._startGameWithName?.(name, {
+      difficulty: 'Normal',
+      mode: 'PvP',
+      mapId: gameContext.gameState.selectedMapId,
+      bots,
+    });
     setGameStarted(true);
-  }, [gameContext, playerName]);
+  }, [gameContext.gameState.selectedMapId]);
 
-  // React overlay for intro with input/button
+  const startSoloMatch = useCallback((name: string, bots: string[]) => {
+    // An intentional room departure must not reset the new local match.
+    void (async () => {
+      await gameContext.leaveLobby();
+      previousRoomRef.current = null;
+      startMatch(name, bots);
+    })();
+  }, [gameContext, startMatch]);
+
+  const handleHostStartGame = useCallback(() => {
+    const name = playerName || "Player";
+    if (gameContext.gameState.connectedPlayers.length < 2) {
+      const bots = matchPlayers.filter(slot => slot.type === 'bot').map(slot => slot.name);
+      if (bots.length) startSoloMatch(name, bots);
+      return;
+    }
+    gameContext.hostStartGame();
+    startMatch(name);
+  }, [gameContext, matchPlayers, playerName, startMatch, startSoloMatch]);
+
   const handleStart = () => {
     const name = (playerName || "Player").trim();
     setPlayerName(name);
+    const bots = matchPlayers.filter(slot => slot.type === 'bot').map(slot => slot.name);
+    const hasRemotePlayer = gameContext.gameState.connectedPlayers.length > 1;
 
-    const remotePlayers = Math.max(gameContext.gameState.connectedPlayers.length - 1, 0);
-    const activeBots = matchPlayers.filter(p => p.type === 'bot').length;
-    const totalFighters = 1 + remotePlayers + (gameContext.gameState.isMultiplayerGame ? 1 : 0) + activeBots;
-
-    if (totalFighters < 2) {
-      setDialogMessage({ 
-        title: 'Not Enough Fighters', 
-        message: 'Need at least 2 fighters! Add a bot or wait for another player to join.', 
-        type: 'warning' 
+    if (!hasRemotePlayer && !bots.length) {
+      setDialogMessage({
+        title: 'Not Enough Fighters',
+        message: 'Need at least 2 fighters! Add a bot or wait for another player to join.',
+        type: 'warning'
       });
       return;
     }
 
     if (gameContext.gameState.lobbyPhase === 'waiting') {
-      gameContext.startMapSelection(activeBots);
+      gameContext.startMapSelection(bots.length);
       return;
     }
-
-    // Start game with match setup and selected map
-    const canvas = canvasRef.current as any;
-    if (canvas && canvas._startGameWithName) {
-      canvas._startGameWithName(name, { 
-        difficulty: 'Normal', 
-        mode: 'PvP',
-        matchPlayers,
-        matchStocks,
-        matchTimeLimit,
-        remotePlayers: gameContext.gameState.connectedPlayers,
-        mapId: gameContext.gameState.selectedMapId
-      });
-    }
-    setGameStarted(true);
+    startSoloMatch(name, bots);
   };
 
   // Also start on Enter within the input
