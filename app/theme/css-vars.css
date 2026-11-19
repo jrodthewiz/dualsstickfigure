@@ -110,6 +110,19 @@
   align-items: start;
 }
 
+.game-hub-link {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  z-index: 10002;
+  padding: 8px 12px;
+  border: 1px solid #c18b82;
+  border-radius: 4px;
+  background: #1c1212;
+  color: #fff4ea;
+  font: 600 14px system-ui, sans-serif;
+}
+
 .game-title-plaque {
   width: min(72vw, 560px);
   min-height: 124px;

@@ -1,4 +1,4 @@
-import type { Viewport } from 'next';
+import type { Metadata, Viewport } from 'next';
 import { AblyContextProvider } from './context/AblyContext';
 import { GameProvider } from './context/GameContext';
 import { ThemeProvider } from './context/ThemeProvider';
@@ -7,6 +7,11 @@ import './theme/css-vars.css';
 export const viewport: Viewport = {
   width: 'device-width',
   initialScale: 1,
+};
+
+export const metadata: Metadata = {
+  title: 'Stickfigure Mayhem',
+  description: 'Fight bots or invite a friend to a fast-paced platform brawler.',
 };
 
 export default function RootLayout({

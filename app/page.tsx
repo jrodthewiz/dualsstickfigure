@@ -11481,6 +11481,9 @@ const BULLET_IMPACT_PROFILES: Record<string, BulletImpactProfile> = {
   };
   return (
     <div className="game-root" style={{ width: "100vw", height: "100vh", background: "#000", position: "relative" }}>
+      {!gameStarted && gamePath('/') !== '/' && (
+        <a className="game-hub-link" href="/">Back to Hub</a>
+      )}
       <Head>
         <title>JRod Presents: Stickfigure Mayhem</title>
         <meta name="description" content="An action-packed stickfigure platformer game." />
