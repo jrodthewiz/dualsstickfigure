@@ -9,7 +9,7 @@ npm ci
 npm run dev
 ```
 
-Visit `http://localhost:3000`. Solo gameplay runs without service credentials. For multiplayer, copy `.env.example` to `.env.local` and set `ABLY_API_KEY` before starting the server. Share a room code or use **Copy invite link** from the lobby.
+Visit `http://localhost:3000`. Solo and multiplayer need no provider credentials. Open the game in two independent browser contexts and use **Copy invite link** or the displayed room code. The standalone Next server stores rooms in memory for one process. Use localhost or HTTPS for browser cryptography and WebRTC.
 
 ## Build for Production
 
@@ -24,9 +24,17 @@ npm start
 
 The Hub build uses lossless WebP for sprites and match-intro art. The build checks image dimensions, alpha, and every visible pixel after encoding.
 
-In the Hub Worker, call `issueMultiplayerToken(request, env.STICKFIGURE_ABLY_API_KEY)` from `app/utils/multiplayerAuth.mjs` for `GET /stickfigure/api/multiplayer-token/`. Configure `STICKFIGURE_ABLY_API_KEY` as a runtime secret. A standalone Next.js deployment uses `ABLY_API_KEY` for the corresponding route. Keep the same Ably app and room namespace if players on both hosts should be able to share room codes.
+Apply [the room migration](integration/stickfigure-rooms.sql) to the Hub's existing D1 database. Copy [the Worker route adapter](integration/stickfigure-room-worker.mjs) and its [room server module](app/utils/roomServer.mjs) into the Hub source. In the Hub Worker's fetch handler, call `routeStickfigureRoom(request, env.DB)` before routing static assets, using the actual Hub D1 binding in place of `DB`. Return its result when it handles the request. The adapter handles `POST /stickfigure/api/multiplayer-room/` with or without the trailing slash.
+
+The room endpoint carries lobby membership and WebRTC signaling. Gameplay sends over WebRTC DataChannels when connected. Until a peer connects, or when a network blocks the direct connection, the same Hub endpoint relays gameplay for that peer. WebRTC uses a public STUN endpoint for address discovery and the Hub relay for fallback. No TURN service or provider key is required. Rooms expire after the host disconnects. Voice uses its existing WebRTC stream and may be unavailable on networks that prevent direct connections.
 
 Use the existing JRod Hub Site (`appgprj_6ac2e378ab00819189d0aa31f0db5147`) and reconcile the game with the latest Hub source before saving and deploying. Record the exact GitHub revision in the integration. Verify the JRod and generated Sites URLs with a host and guest through room creation, ready-up, match start and gameplay. Pushes to this repository do not deploy the Hub.
+
+## Test the Hub package
+
+Run `npm run build:hub` followed by `node scripts/preview-hub.mjs` on Node 24 or newer. Open `http://127.0.0.1:3104/stickfigure/`. The preview serves the actual static build and uses the same Worker callback, schema, and queries with local SQLite. Production durability and routing require a deployed Hub Worker and its D1 binding.
+
+With Chromium installed, run `npm run smoke:hub` while the preview is running. It verifies software rasterization and completes the two-player flow. Use `npm run smoke:hub -- --force-relay` to exercise the relay by disabling WebRTC in the test browser. Use `npm run smoke:hub -- --require-direct` on an unrestricted network to require gameplay over a WebRTC DataChannel. Set `GAME_URL` or `CHROMIUM_PATH` if your preview URL or Chromium executable differs.
 
 ## Game Controls
 

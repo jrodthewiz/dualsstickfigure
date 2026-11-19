@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import SimplePeer from 'simple-peer';
-import type * as Ably from 'ably';
-import { safeChannelPublish, safeChannelSubscribe } from '../utils/ablyHelpers';
+import type { RealtimeRoom } from '../utils/roomClient';
+import { safeChannelPublish, safeChannelSubscribe } from '../utils/roomHelpers';
 
 interface VoicePeer {
   peer: SimplePeer.Instance;
@@ -9,7 +9,7 @@ interface VoicePeer {
 }
 
 interface UseLobbyVoiceOptions {
-  channel: Ably.RealtimeChannel | null;
+  channel: RealtimeRoom | null;
   connectedPlayers: Array<{ clientId: string; username: string }>;
   localClientId: string | null;
   enabled: boolean;

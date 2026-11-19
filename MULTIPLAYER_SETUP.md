@@ -1,5 +1,7 @@
 # PvP Multiplayer Setup Guide
 
+> This is the historical Ably setup. See the [current keyless setup](README.md#jrod-hub-and-chatgpt-sites).
+
 This guide explains how to set up and use the newly implemented PvP multiplayer feature in the Stickfigure Platformer game.
 
 ## What Was Implemented

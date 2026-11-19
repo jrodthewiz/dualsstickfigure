@@ -1,4 +1,4 @@
-// Multiplayer TypeScript types for Ably integration
+import type { RealtimeRoom } from "../utils/roomClient";
 
 export interface PlayerSyncData {
   id: string;
@@ -72,7 +72,7 @@ export interface MultiplayerState {
   multiplayerSessionId: string | null;
   lobbyPhase: LobbyPhase | null; // null when not in lobby
   connectedPlayers: ConnectedPlayer[];
-  ablyChannelRef: any | null; // RealtimeChannel type
+  roomChannel: RealtimeRoom | null;
   username: string;
   intendedGameMode: 'PvP' | 'Infinite';
   selectedMapId: string;

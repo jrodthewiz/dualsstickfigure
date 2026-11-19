@@ -1,5 +1,5 @@
 import type { Metadata, Viewport } from 'next';
-import { AblyContextProvider } from './context/AblyContext';
+import { RoomProvider } from './context/RoomContext';
 import { GameProvider } from './context/GameContext';
 import { ThemeProvider } from './context/ThemeProvider';
 import './theme/css-vars.css';
@@ -23,11 +23,11 @@ export default function RootLayout({
     <html lang="en" style={{ margin: 0, padding: 0, overflow: 'hidden', width: '100%', height: '100%' }}>
       <body style={{ margin: 0, padding: 0, overflow: 'hidden', width: '100%', height: '100%' }}>
         <ThemeProvider>
-          <AblyContextProvider>
+          <RoomProvider>
             <GameProvider>
               {children}
             </GameProvider>
-          </AblyContextProvider>
+          </RoomProvider>
         </ThemeProvider>
       </body>
     </html>

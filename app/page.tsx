@@ -11,8 +11,8 @@ import { applyDecisionToInput, stepEnemyStateMachine } from "./game/ai/stateMach
 import type { EnemyAttackName } from "./game/ai/stateMachine";
 
 import { useGameContext } from "./context/GameContext";
-import { useAbly } from "./context/AblyContext";
-import { safeChannelPublish, safeChannelSubscribe } from "./utils/ablyHelpers";
+import { useRoomClient } from "./context/RoomContext";
+import { safeChannelPublish, safeChannelSubscribe } from "./utils/roomHelpers";
 import { gameImagePath, gamePath, getInvitedRoom } from "./utils/gamePath";
 import type { RemotePlayer } from "./types/Multiplayer";
 import { AVAILABLE_MAPS, getMapById } from "./types/Maps";
@@ -997,7 +997,7 @@ export default function PlatformerPage(): JSX.Element {
 
   // Multiplayer hooks
   const gameContext = useGameContext();
-  const ably = useAbly();
+  const roomClient = useRoomClient();
   const [remotePlayers, setRemotePlayers] = useState<Map<string, RemotePlayer>>(new Map());
   const lastSyncTime = useRef(0);
   const localPlayerId = useRef<string>('');
@@ -1015,17 +1015,17 @@ export default function PlatformerPage(): JSX.Element {
     remotePlayersRef.current = remotePlayers;
   }, [remotePlayers]);
 
-  // Set local player ID from Ably
+  // Set local player ID from room transport
   useEffect(() => {
-    if (ably && ably.auth && ably.auth.clientId) {
-      localPlayerId.current = ably.auth.clientId;
+    if (roomClient && roomClient.auth && roomClient.auth.clientId) {
+      localPlayerId.current = roomClient.auth.clientId;
     }
-  }, [ably]);
+  }, [roomClient]);
 
   // ===== Multiplayer: Player Position Sync with Interpolation =====
   // Receives network updates (20Hz) and buffers positions for smooth interpolation
   useEffect(() => {
-    const channel = gameContext.gameState.ablyChannelRef;
+    const channel = gameContext.gameState.roomChannel;
     if (!channel || !gameContext.gameState.isMultiplayerGame) return;
 
     const handlePlayerSync = (message: any) => {
@@ -1085,12 +1085,12 @@ export default function PlatformerPage(): JSX.Element {
     return () => {
       if (unsubscribe) unsubscribe();
     };
-  }, [gameContext.gameState.ablyChannelRef, gameContext.gameState.isMultiplayerGame, gameContext.gameState.connectedPlayers]);
+  }, [gameContext.gameState.roomChannel, gameContext.gameState.isMultiplayerGame, gameContext.gameState.connectedPlayers]);
 
   // ===== Multiplayer: PvP Hit Event Reception =====
   // Processes combat hits from attackers with full effect data
   useEffect(() => {
-    const channel = gameContext.gameState.ablyChannelRef;
+    const channel = gameContext.gameState.roomChannel;
     if (!channel || !gameContext.gameState.isMultiplayerGame) return;
 
     const handlePlayerHit = (message: any) => {
@@ -1130,12 +1130,12 @@ export default function PlatformerPage(): JSX.Element {
     return () => {
       if (unsubscribe) unsubscribe();
     };
-  }, [gameContext.gameState.ablyChannelRef, gameContext.gameState.isMultiplayerGame]);
+  }, [gameContext.gameState.roomChannel, gameContext.gameState.isMultiplayerGame]);
 
   // ===== Multiplayer: Bullet Synchronization =====
   // Receives bullet creation events from remote players for visual feedback
   useEffect(() => {
-    const channel = gameContext.gameState.ablyChannelRef;
+    const channel = gameContext.gameState.roomChannel;
     if (!channel || !gameContext.gameState.isMultiplayerGame) return;
 
     const handleBulletSync = (message: any) => {
@@ -1156,7 +1156,7 @@ export default function PlatformerPage(): JSX.Element {
     return () => {
       if (unsubscribe) unsubscribe();
     };
-  }, [gameContext.gameState.ablyChannelRef, gameContext.gameState.isMultiplayerGame]);
+  }, [gameContext.gameState.roomChannel, gameContext.gameState.isMultiplayerGame]);
 
 
   // UI/State
@@ -1185,26 +1185,18 @@ export default function PlatformerPage(): JSX.Element {
     }
   }, [gameStarted, INTRO_CONFIG.duration]);
 
-  // ===== Multiplayer: Exit Game When Host Ends Match =====
-  // Monitors lobby phase - if it returns to map-selection, exit the game
+  // Return to the lobby when the host ends the match or closes the room.
+  const previousRoomRef = useRef(gameContext.gameState.roomChannel);
   useEffect(() => {
-    // If we're in a multiplayer game and phase changes to map-selection, exit game
-    if (gameContext.gameState.isMultiplayerGame && 
-        gameContext.gameState.lobbyPhase === 'map-selection' && 
-        gameStarted) {
-      // Host ended the match - return to map selection
-      console.log('Host ended the match - returning to lobby');
-      
-      // Reset canvas game state
-      const canvas = canvasRef.current as any;
-      if (canvas && canvas._resetToLobby) {
-        canvas._resetToLobby();
-      }
-      
+    const room = gameContext.gameState.roomChannel;
+    const roomClosed = previousRoomRef.current && !room;
+    previousRoomRef.current = room;
+    if (gameStarted && (roomClosed || (room && gameContext.gameState.lobbyPhase === 'map-selection'))) {
+      (canvasRef.current as any)?._resetToLobby?.();
       setGameStarted(false);
       setIsPaused(false);
     }
-  }, [gameContext.gameState.lobbyPhase, gameContext.gameState.isMultiplayerGame, gameStarted]);
+  }, [gameContext.gameState.lobbyPhase, gameContext.gameState.roomChannel, gameStarted]);
 
   // Runtime-tweakable visual settings
   const settingsRef = useRef({
@@ -1382,32 +1374,17 @@ useEffect(() => {
   const currentMapRef = useRef(AVAILABLE_MAPS[0]);
 
   // Visitors without an invite get a room they can share from the main menu.
-  React.useEffect(() => {
-    if (getInvitedRoom(new URLSearchParams(window.location.search))) return;
-    let cancelled = false;
+  const attemptedAutoHost = useRef(false);
+  useEffect(() => {
+    if (attemptedAutoHost.current || !roomClient || getInvitedRoom(new URLSearchParams(window.location.search))) return;
+    attemptedAutoHost.current = true;
+    void gameContext.createMultiplayerLobby(playerName || 'Player 1').finally(() => setAutoLobbyReady(true));
+  }, [gameContext.createMultiplayerLobby, playerName, roomClient]);
 
-    async function ensureLobby() {
-      if (!gameContext.gameState.lobbyPhase) {
-        await gameContext.createMultiplayerLobby(playerName || 'Player 1');
-        if (!cancelled) {
-          setAutoLobbyReady(true);
-        }
-      } else if (!cancelled) {
-        setAutoLobbyReady(true);
-      }
-    }
-
-    ensureLobby();
-
-    return () => {
-      cancelled = true;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
   // Update player slots when remote players join/leave
   React.useEffect(() => {
     const colors = ['#00ff88', '#ff0066', '#ffaa00', '#00aaff'];
-    const localClientId = ably?.auth?.clientId || localPlayerId.current || null;
+    const localClientId = roomClient?.auth?.clientId || localPlayerId.current || null;
     const connectedPlayers = gameContext.gameState.connectedPlayers;
     const remotePlayers = connectedPlayers.filter(player => player.clientId !== localClientId);
     
@@ -1439,11 +1416,11 @@ useEffect(() => {
       
       return newSlots;
     });
-  }, [ably, gameContext.gameState.connectedPlayers, playerName]);
+  }, [roomClient, gameContext.gameState.connectedPlayers, playerName]);
 
   // Subscribe to game start event (for clients)
   useEffect(() => {
-    const channel = gameContext.gameState.ablyChannelRef;
+    const channel = gameContext.gameState.roomChannel;
     if (!channel || gameContext.gameState.isHost) return;
 
     const handleGameStart = (message: any) => {
@@ -1464,7 +1441,7 @@ useEffect(() => {
     return () => {
       if (unsubscribe) unsubscribe();
     };
-  }, [gameContext.gameState.ablyChannelRef, gameContext.gameState.isHost, playerName]);
+  }, [gameContext.gameState.roomChannel, gameContext.gameState.isHost, playerName]);
 
   // Refs for loop flags
   const runningRef = useRef(true);
@@ -4656,7 +4633,7 @@ const BULLET_IMPACT_PROFILES: Record<string, BulletImpactProfile> = {
     function syncBulletToMultiplayer(bullet: Bullet, weaponType: string) {
       if (!multiplayerStateRef.current.isMultiplayerGame || bullet.from !== "player") return;
       
-      const channel = multiplayerStateRef.current.ablyChannelRef;
+      const channel = multiplayerStateRef.current.roomChannel;
       if (channel) {
         safeChannelPublish(channel, 'bulletSync', {
           shooterId: localPlayerId.current,
@@ -4762,7 +4739,7 @@ const BULLET_IMPACT_PROFILES: Record<string, BulletImpactProfile> = {
               const dmg = Math.floor(weapon.damage * 1.2 * damageMul);
               
               // Send railgun hit to network
-              const channel = multiplayerStateRef.current.ablyChannelRef;
+              const channel = multiplayerStateRef.current.roomChannel;
               if (channel) {
                 const bulletAngle = Math.atan2(remoteCenterY - muzzlePoint.y, remotePlayer.position.x - muzzlePoint.x);
                 safeChannelPublish(channel, 'playerHit', {
@@ -4972,7 +4949,7 @@ const BULLET_IMPACT_PROFILES: Record<string, BulletImpactProfile> = {
             if (d < remoteHitRadius + 6) {
               const dmg = Math.floor(weapon.damage * 0.6 * damageMul);
               
-              const channel = multiplayerStateRef.current.ablyChannelRef;
+              const channel = multiplayerStateRef.current.roomChannel;
               if (channel) {
                 const bulletAngle = Math.atan2(remoteCenterY - muzzlePoint.y, remotePlayer.position.x - muzzlePoint.x);
                 safeChannelPublish(channel, 'playerHit', {
@@ -6492,7 +6469,7 @@ const BULLET_IMPACT_PROFILES: Record<string, BulletImpactProfile> = {
                   const knockbackStrength = 400 * damageMultiplier;
                   
                   // Send explosion hit to network
-                  const channel = multiplayerStateRef.current.ablyChannelRef;
+                  const channel = multiplayerStateRef.current.roomChannel;
                   if (channel) {
                     safeChannelPublish(channel, 'playerHit', {
                       victimId: explosionRemoteId,
@@ -6548,7 +6525,7 @@ const BULLET_IMPACT_PROFILES: Record<string, BulletImpactProfile> = {
             const knockbackY = Math.sin(bulletAngle) * knockbackStrength * 0.6 - 80;
             
             // Send hit event to network
-            const channel = multiplayerStateRef.current.ablyChannelRef;
+            const channel = multiplayerStateRef.current.roomChannel;
             if (channel) {
               safeChannelPublish(channel, 'playerHit', {
                 victimId: remoteId,
@@ -6741,7 +6718,7 @@ const BULLET_IMPACT_PROFILES: Record<string, BulletImpactProfile> = {
                   const knockbackStrength = 400 * damageMultiplier;
                   
                   // Send explosion hit to network
-                  const channel = multiplayerStateRef.current.ablyChannelRef;
+                  const channel = multiplayerStateRef.current.roomChannel;
                   if (channel) {
                     safeChannelPublish(channel, 'playerHit', {
                       victimId: remoteId,
@@ -7859,7 +7836,7 @@ const BULLET_IMPACT_PROFILES: Record<string, BulletImpactProfile> = {
                 : -180;
               
               // Transmit hit event to victim with full effect parameters
-                const channel = multiplayerStateRef.current.ablyChannelRef;
+                const channel = multiplayerStateRef.current.roomChannel;
               if (!channel) break;
               
                   safeChannelPublish(channel, 'playerHit', {
@@ -8275,7 +8252,7 @@ const BULLET_IMPACT_PROFILES: Record<string, BulletImpactProfile> = {
     // Multiplayer: Sync player state to other players
     const syncPlayerToNetwork = () => {
       const mpState = multiplayerStateRef.current;
-      if (!mpState.isMultiplayerGame || !mpState.ablyChannelRef) return;
+      if (!mpState.isMultiplayerGame || !mpState.roomChannel) return;
       
       const now = Date.now();
       const timeSinceLastSync = now - lastSyncTime.current;
@@ -8310,7 +8287,7 @@ const BULLET_IMPACT_PROFILES: Record<string, BulletImpactProfile> = {
         timestamp: now
       };
       
-      safeChannelPublish(mpState.ablyChannelRef, 'playerSync', syncData);
+      safeChannelPublish(mpState.roomChannel, 'playerSync', syncData);
       lastSyncTime.current = now;
     };
     const render = () => {
@@ -11893,9 +11870,9 @@ const BULLET_IMPACT_PROFILES: Record<string, BulletImpactProfile> = {
       {/* Voice Chat - Persistent across all multiplayer phases */}
       {gameContext.gameState.isMultiplayerGame && gameContext.gameState.multiplayerSessionId && (
         <VoiceChat
-          channel={gameContext.gameState.ablyChannelRef}
+          channel={gameContext.gameState.roomChannel}
           connectedPlayers={gameContext.gameState.connectedPlayers}
-          localClientId={ably?.auth.clientId || null}
+          localClientId={roomClient?.auth.clientId || null}
           inGame={gameStarted}
         />
       )}
@@ -11920,7 +11897,7 @@ const BULLET_IMPACT_PROFILES: Record<string, BulletImpactProfile> = {
           onToggleReady={gameContext.toggleReady}
           onStartGame={handleHostStartGame}
           isHost={gameContext.gameState.isHost}
-          currentPlayerClientId={ably?.auth.clientId || ''}
+          currentPlayerClientId={roomClient?.auth.clientId || ''}
           sessionId={gameContext.gameState.multiplayerSessionId}
           botCount={matchPlayers.filter(p => p.type === 'bot').length}
         />
@@ -12262,6 +12239,7 @@ const BULLET_IMPACT_PROFILES: Record<string, BulletImpactProfile> = {
                       >
                         Copy invite link
                       </button>
+                      <button onClick={() => { void handleLeaveLobby(); }}>Leave Lobby</button>
                       {gameContext.gameState.connectedPlayers.map((player, idx) => (
                         <div key={player.clientId} style={{ 
                           fontSize: 10, 

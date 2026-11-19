@@ -1,12 +1,11 @@
 "use client";
 
 import React, { createContext, useContext, useState, useCallback, ReactNode } from 'react';
-import * as Ably from 'ably';
-import { useAbly } from './AblyContext';
-import { safeChannelPublish, safeChannelSubscribe, cleanupChannelSubscriptions } from '../utils/ablyHelpers';
+import type { RealtimeRoom, RoomMember } from '../utils/roomClient';
+import { useRoomClient } from './RoomContext';
+import { safeChannelPublish, safeChannelSubscribe, cleanupChannelSubscriptions } from '../utils/roomHelpers';
 import type { ConnectedPlayer, MultiplayerState } from '../types/Multiplayer';
 import { getDefaultMap } from '../types/Maps';
-import { STICKFIGURE_CHANNEL_PREFIX } from '../utils/multiplayerAuth.mjs';
 
 interface GameContextType {
   gameState: MultiplayerState;
@@ -23,27 +22,6 @@ interface GameContextType {
 }
 
 const GameContext = createContext<GameContextType | null>(null);
-
-function connectMultiplayer(client: Ably.Realtime): Promise<void> {
-  const connection = client.connection;
-  if (connection.state === 'connected') return Promise.resolve();
-
-  return new Promise((resolve, reject) => {
-    const finish = (error?: Error) => {
-      clearTimeout(timeout);
-      connection.off('connected', onConnected);
-      connection.off('failed', onFailed);
-      if (error) reject(error);
-      else resolve();
-    };
-    const onConnected = () => finish();
-    const onFailed = () => finish(new Error('Multiplayer connection failed'));
-    const timeout = setTimeout(() => finish(new Error('Multiplayer connection timed out')), 10000);
-    connection.on('connected', onConnected);
-    connection.on('failed', onFailed);
-    client.connect();
-  });
-}
 
 const debugLog = (...args: unknown[]) => {
   try {
@@ -67,41 +45,50 @@ interface GameProviderProps {
   children: ReactNode;
 }
 
-export function GameProvider({ children }: GameProviderProps) {
-  const ably = useAbly();
-  
-  const [gameState, setGameState] = useState<MultiplayerState>({
+function initialLobby(): MultiplayerState {
+  return {
     isMultiplayerGame: false,
     isHost: false,
     multiplayerSessionId: null,
     lobbyPhase: null,
     connectedPlayers: [],
-    ablyChannelRef: null,
+    roomChannel: null,
     username: '',
     intendedGameMode: 'Infinite',
     selectedMapId: getDefaultMap().id,
-  });
+  };
+}
 
-  const getChannel = useCallback((sessionId: string): Ably.RealtimeChannel | null => {
-    if (!ably) {
-      console.warn('Ably client not initialized');
+export function GameProvider({ children }: GameProviderProps) {
+  const roomClient = useRoomClient();
+
+  const [gameState, setGameState] = useState<MultiplayerState>(initialLobby);
+
+  const subscribeToRoomClose = useCallback((channel: RealtimeRoom) => {
+    channel.subscribe('roomClosed', () => {
+      setGameState(prev => prev.roomChannel === channel ? initialLobby() : prev);
+    });
+  }, []);
+
+  const getChannel = useCallback((sessionId: string): RealtimeRoom | null => {
+    if (!roomClient) {
+      console.warn('room transport client not initialized');
       return null;
     }
     if (!/^pvp-[a-z0-9]{9}$/.test(sessionId)) return null;
-    return ably.channels.get(`${STICKFIGURE_CHANNEL_PREFIX}:${sessionId}`);
-  }, [ably]);
+    return roomClient.channels.get(sessionId);
+  }, [roomClient]);
 
   /**
    * Create a new multiplayer lobby (Host)
    */
   const createMultiplayerLobby = useCallback(async (username: string): Promise<string | null> => {
-    if (!ably) {
-      console.error('Ably client not available');
+    if (!roomClient) {
+      console.error('room transport client not available');
       return null;
     }
 
     try {
-      await connectMultiplayer(ably);
 
       // Generate unique session ID
       const sessionId = `pvp-${crypto.randomUUID().replace(/-/g, '').slice(0, 9)}`;
@@ -112,8 +99,9 @@ export function GameProvider({ children }: GameProviderProps) {
         return null;
       }
 
-      const clientId = ably.auth.clientId || 'host';
+      const clientId = roomClient.auth.clientId || 'host';
       await channel.presence.enter({ username });
+      subscribeToRoomClose(channel);
 
       // Update state first - start in waiting phase before map selection
       setGameState(prev => ({
@@ -123,13 +111,13 @@ export function GameProvider({ children }: GameProviderProps) {
         lobbyPhase: 'waiting',
         isMultiplayerGame: true,
         connectedPlayers: [{ clientId, username, isReady: false }],
-        ablyChannelRef: channel,
+        roomChannel: channel,
         username,
         intendedGameMode: 'PvP',
       }));
 
       // Subscribe to presence events
-      channel.presence.subscribe('enter', (member: Ably.PresenceMessage) => {
+      channel.presence.subscribe('enter', (member: RoomMember) => {
         if (member.clientId !== clientId) {
           debugLog('Player joined:', member.clientId, member.data);
           const newPlayer: ConnectedPlayer = {
@@ -159,7 +147,7 @@ export function GameProvider({ children }: GameProviderProps) {
         }
       });
 
-      channel.presence.subscribe('leave', (member: Ably.PresenceMessage) => {
+      channel.presence.subscribe('leave', (member: RoomMember) => {
         if (member.clientId !== clientId) {
           debugLog('Player left:', member.clientId);
           setGameState(prev => ({
@@ -216,18 +204,20 @@ export function GameProvider({ children }: GameProviderProps) {
       console.error('Failed to create lobby:', error);
       return null;
     }
-  }, [ably, getChannel]);
+  }, [roomClient, getChannel, subscribeToRoomClose]);
 
   /**
    * Join an existing multiplayer lobby (Client)
    */
   const joinMultiplayerLobby = useCallback(async (sessionId: string, username: string): Promise<boolean> => {
-    if (!ably) {
-      console.error('Ably client not available');
+    if (!roomClient) {
+      console.error('room transport client not available');
       return false;
     }
 
     try {
+      const previousChannel = gameState.roomChannel;
+      if (previousChannel?.name === sessionId) return true;
       const channel = getChannel(sessionId);
       
       if (!channel) {
@@ -235,7 +225,6 @@ export function GameProvider({ children }: GameProviderProps) {
         return false;
       }
 
-      await connectMultiplayer(ably);
 
       // Check if lobby exists (verify presence)
       const members = await channel.presence.get();
@@ -244,7 +233,7 @@ export function GameProvider({ children }: GameProviderProps) {
         return false;
       }
 
-      const clientId = ably.auth.clientId || `player-${Math.random().toString(36).substr(2, 6)}`;
+      const clientId = roomClient.auth.clientId || `player-${Math.random().toString(36).substr(2, 6)}`;
 
       // Build initial player list from presence
       const initialPlayers: ConnectedPlayer[] = members.map(m => ({
@@ -266,7 +255,7 @@ export function GameProvider({ children }: GameProviderProps) {
         lobbyPhase: 'waiting',
         isMultiplayerGame: true,
         connectedPlayers: initialPlayers,
-        ablyChannelRef: channel,
+        roomChannel: channel,
         username,
         intendedGameMode: 'PvP',
       }));
@@ -331,7 +320,7 @@ export function GameProvider({ children }: GameProviderProps) {
       });
 
       // Subscribe to presence leave
-      channel.presence.subscribe('leave', (member: Ably.PresenceMessage) => {
+      channel.presence.subscribe('leave', (member: RoomMember) => {
         debugLog('Player left:', member.clientId);
         
         setGameState(prev => {
@@ -339,18 +328,14 @@ export function GameProvider({ children }: GameProviderProps) {
             p => p.clientId !== member.clientId
           );
           
-          // If host left, return to menu
-          if (member.clientId === prev.connectedPlayers[0]?.clientId) {
-            console.warn('Host disconnected');
-            // Will be handled by leaveLobby call from UI
-          }
-          
           return { ...prev, connectedPlayers: updated };
         });
       });
 
       try {
         await channel.presence.enter({ username });
+        subscribeToRoomClose(channel);
+        if (previousChannel) void previousChannel.presence.leave().catch(() => undefined);
       } catch (error) {
         channel.unsubscribe();
         channel.presence.unsubscribe();
@@ -361,7 +346,7 @@ export function GameProvider({ children }: GameProviderProps) {
           multiplayerSessionId: null,
           lobbyPhase: null,
           connectedPlayers: [],
-          ablyChannelRef: null,
+          roomChannel: null,
           username: '',
           intendedGameMode: 'Infinite',
           selectedMapId: getDefaultMap().id,
@@ -375,13 +360,13 @@ export function GameProvider({ children }: GameProviderProps) {
       console.error('Failed to join lobby:', error);
       return false;
     }
-  }, [ably, getChannel]);
+  }, [roomClient, getChannel, gameState.roomChannel, subscribeToRoomClose]);
 
   /**
    * Leave the current lobby
    */
   const leaveLobby = useCallback(async () => {
-    const channel = gameState.ablyChannelRef;
+    const channel = gameState.roomChannel;
     
     if (channel) {
       try {
@@ -399,32 +384,21 @@ export function GameProvider({ children }: GameProviderProps) {
       }
     }
 
-    // Reset state
-    setGameState({
-      isMultiplayerGame: false,
-      isHost: false,
-      multiplayerSessionId: null,
-      lobbyPhase: null,
-      connectedPlayers: [],
-      ablyChannelRef: null,
-      username: '',
-      intendedGameMode: 'Infinite',
-      selectedMapId: getDefaultMap().id,
-    });
-  }, [gameState.ablyChannelRef]);
+    setGameState(initialLobby());
+  }, [gameState.roomChannel]);
 
   /**
    * Host starts the game from lobby
    */
   const hostStartGame = useCallback(() => {
     setGameState(prev => {
-      if (!prev.isHost || !prev.ablyChannelRef) {
+      if (!prev.isHost || !prev.roomChannel) {
         console.warn('Only host can start the game');
         return prev;
       }
 
       // Broadcast game start with selected map
-      safeChannelPublish(prev.ablyChannelRef, 'gameStart', {
+      safeChannelPublish(prev.roomChannel, 'gameStart', {
         players: prev.connectedPlayers,
         startTime: Date.now(),
         gameMode: 'PvP',
@@ -456,8 +430,8 @@ export function GameProvider({ children }: GameProviderProps) {
       const resetPlayers = prev.connectedPlayers.map(p => ({ ...p, isReady: false }));
 
       // Broadcast phase change to ALL players (including host via their own subscription)
-      if (prev.ablyChannelRef) {
-        safeChannelPublish(prev.ablyChannelRef, 'phaseChange', {
+      if (prev.roomChannel) {
+        safeChannelPublish(prev.roomChannel, 'phaseChange', {
           phase: 'map-selection',
           players: resetPlayers,
           selectedMapId: prev.selectedMapId,
@@ -486,8 +460,8 @@ export function GameProvider({ children }: GameProviderProps) {
       debugLog('Host selecting map:', mapId);
 
       // Broadcast map selection to all clients
-      if (prev.ablyChannelRef) {
-        safeChannelPublish(prev.ablyChannelRef, 'mapSelected', {
+      if (prev.roomChannel) {
+        safeChannelPublish(prev.roomChannel, 'mapSelected', {
           mapId,
         });
       }
@@ -516,8 +490,8 @@ export function GameProvider({ children }: GameProviderProps) {
 
       const resetPlayers = prev.connectedPlayers.map(p => ({ ...p, isReady: false }));
 
-      if (prev.ablyChannelRef) {
-        safeChannelPublish(prev.ablyChannelRef, 'phaseChange', {
+      if (prev.roomChannel) {
+        safeChannelPublish(prev.roomChannel, 'phaseChange', {
           phase: 'map-selection',
           players: resetPlayers,
           selectedMapId: prev.selectedMapId,
@@ -544,8 +518,8 @@ export function GameProvider({ children }: GameProviderProps) {
 
       const updatedPlayers = prev.connectedPlayers.map(p => ({ ...p, isReady: false }));
 
-      if (prev.ablyChannelRef) {
-        safeChannelPublish(prev.ablyChannelRef, 'phaseChange', {
+      if (prev.roomChannel) {
+        safeChannelPublish(prev.roomChannel, 'phaseChange', {
           phase: 'ready-up',
           players: updatedPlayers,
           selectedMapId: prev.selectedMapId,
@@ -565,14 +539,14 @@ export function GameProvider({ children }: GameProviderProps) {
    */
   const toggleReady = useCallback(() => {
     setGameState(prev => {
-      if (!prev.ablyChannelRef) {
+      if (!prev.roomChannel) {
         console.warn('Not in a lobby');
         return prev;
       }
 
       const resolvedClientId =
-        (ably && ably.auth.clientId)
-          ? ably.auth.clientId
+        (roomClient && roomClient.auth.clientId)
+          ? roomClient.auth.clientId
           : prev.connectedPlayers.find(p => p.username === prev.username)?.clientId || '';
 
       if (!resolvedClientId) {
@@ -596,8 +570,8 @@ export function GameProvider({ children }: GameProviderProps) {
 
       debugLog('Toggling ready state for', resolvedClientId, 'to', nextReady);
 
-      if (prev.ablyChannelRef) {
-        safeChannelPublish(prev.ablyChannelRef, 'playerReady', {
+      if (prev.roomChannel) {
+        safeChannelPublish(prev.roomChannel, 'playerReady', {
           clientId: resolvedClientId,
           isReady: nextReady,
         });
@@ -610,7 +584,7 @@ export function GameProvider({ children }: GameProviderProps) {
         ),
       };
     });
-  }, [ably]);
+  }, [roomClient]);
 
   const value: GameContextType = {
     gameState,

@@ -1,9 +1,9 @@
-// Safe Ably channel operation helpers
+// Safe room transport channel operation helpers
 
-type RealtimeChannel = any; // Import from Ably if needed
+import type { RealtimeRoom as RealtimeChannel } from "./roomClient";
 
 /**
- * Safely publish a message to an Ably channel
+ * Safely publish a message to an room transport channel
  * Prevents errors from detached/failed channel states
  */
 export function safeChannelPublish(
@@ -35,7 +35,7 @@ export function safeChannelPublish(
 }
 
 /**
- * Safely subscribe to an Ably channel event
+ * Safely subscribe to an room transport channel event
  * Returns cleanup function or null
  */
 export function safeChannelSubscribe(
