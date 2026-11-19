@@ -22,6 +22,8 @@ npm start
 
 `npm run build:hub` packages the prerendered game and assets under `build/site/stickfigure/`. The Hub Worker serves `index.html` for `/stickfigure/`. The rest of that directory goes into the Hub's static assets at the same prefix.
 
+The Hub build uses lossless WebP for sprites and match-intro art. The build checks image dimensions, alpha, and every visible pixel after encoding.
+
 In the Hub Worker, call `issueMultiplayerToken(request, env.STICKFIGURE_ABLY_API_KEY)` from `app/utils/multiplayerAuth.mjs` for `GET /stickfigure/api/multiplayer-token/`. Configure `STICKFIGURE_ABLY_API_KEY` as a runtime secret. A standalone Next.js deployment uses `ABLY_API_KEY` for the corresponding route. Keep the same Ably app and room namespace if players on both hosts should be able to share room codes.
 
 Use the existing JRod Hub Site (`appgprj_6ac2e378ab00819189d0aa31f0db5147`) and reconcile the game with the latest Hub source before saving and deploying. Record the exact GitHub revision in the integration. Verify the JRod and generated Sites URLs with a host and guest through room creation, ready-up, match start and gameplay. Pushes to this repository do not deploy the Hub.

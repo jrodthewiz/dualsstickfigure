@@ -13,7 +13,7 @@ import type { EnemyAttackName } from "./game/ai/stateMachine";
 import { useGameContext } from "./context/GameContext";
 import { useAbly } from "./context/AblyContext";
 import { safeChannelPublish, safeChannelSubscribe } from "./utils/ablyHelpers";
-import { gamePath, getInvitedRoom } from "./utils/gamePath";
+import { gameImagePath, gamePath, getInvitedRoom } from "./utils/gamePath";
 import type { RemotePlayer } from "./types/Multiplayer";
 import { AVAILABLE_MAPS, getMapById } from "./types/Maps";
 import type { MapConfig, RooftopPlatformData, RooftopBuildingDefinition, RooftopFeatureDefinition, RooftopBuildingStyle } from "./types/Maps";
@@ -467,7 +467,7 @@ const getStickmanFrameUrl = (key: string, def: StickmanAnimDef, frameIndex: numb
   const frameId = framePad === 2 ? frameIndex.toString().padStart(2, '0') : frameIndex.toString();
   const soundSuffix = override?.soundFrames?.includes(frameIndex) ? '_play_sound' : '';
 
-  return gamePath(`${def.path}/${baseName}${animName}_${frameId}${soundSuffix}.png`.replace(/ /g, '%20'));
+  return gameImagePath(`${def.path}/${baseName}${animName}_${frameId}${soundSuffix}.png`.replace(/ /g, '%20'));
 };
 
 const globalClips = {
@@ -11876,7 +11876,7 @@ const BULLET_IMPACT_PROFILES: Record<string, BulletImpactProfile> = {
           
           {/* Fight Image */}
           <img
-            src={gamePath('/images/fight image main.png')}
+            src={gameImagePath('/images/fight image main.png')}
             alt="Fight"
             style={{
               maxWidth: INTRO_CONFIG.imageMaxWidth,
