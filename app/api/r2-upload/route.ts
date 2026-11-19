@@ -19,6 +19,10 @@ const PUBLIC_URL_BASE = process.env.R2_PUBLIC_URL || '';
 
 // GET - List files in bucket
 export async function GET(request: NextRequest) {
+  if (process.env.NODE_ENV === 'production') {
+    return NextResponse.json({ error: 'Not found' }, { status: 404 });
+  }
+
   try {
     const { searchParams } = new URL(request.url);
     const prefix = searchParams.get('prefix') || '';
@@ -58,6 +62,10 @@ export async function GET(request: NextRequest) {
 
 // POST - Upload, delete, or sync operations
 export async function POST(request: NextRequest) {
+  if (process.env.NODE_ENV === 'production') {
+    return NextResponse.json({ error: 'Not found' }, { status: 404 });
+  }
+
   try {
     const formData = await request.formData();
     const action = formData.get('action') as string;

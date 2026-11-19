@@ -14,7 +14,7 @@ The game now supports real-time PvP (Player vs Player) multiplayer using Ably fo
 
 ## Prerequisites
 
-1. **Node.js** (v16 or higher)
+1. **Node.js** (v22 or higher)
 2. **Ably Account** (free tier works fine)
 
 ## Setup Instructions
@@ -22,7 +22,7 @@ The game now supports real-time PvP (Player vs Player) multiplayer using Ably fo
 ### 1. Install Dependencies
 
 ```bash
-npm install ably @ably/react
+npm ci
 ```
 
 ### 2. Get Ably API Keys
@@ -36,11 +36,10 @@ npm install ably @ably/react
 Create a `.env.local` file in the project root:
 
 ```env
-NEXT_PUBLIC_ABLY_API_KEY=your_ably_public_key_here
-ABLY_API_KEY=your_ably_private_key_here
+ABLY_API_KEY=your_ably_key_here
 ```
 
-**Important**: Replace `your_ably_public_key_here` with your actual Ably API key.
+Use a server-side Ably key allowed to publish, subscribe, and use presence on `stickfigure:*`. The game requests a short-lived token when a player chooses multiplayer. Remove the legacy `NEXT_PUBLIC_ABLY_API_KEY` setting from new deployments.
 
 ### 4. Start the Development Server
 

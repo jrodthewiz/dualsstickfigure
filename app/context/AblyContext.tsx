@@ -2,6 +2,7 @@
 
 import React, { createContext, useContext, useMemo, ReactNode } from 'react';
 import * as Ably from 'ably';
+import { gamePath } from '../utils/gamePath';
 
 interface AblyContextType {
   client: Ably.Realtime | null;
@@ -28,32 +29,15 @@ export function AblyContextProvider({ children }: AblyProviderProps) {
       return (window as any).__hvaiAblyClient as Ably.Realtime;
     }
     
-    const key = process.env.NEXT_PUBLIC_ABLY_API_KEY;
-    
-    if (!key) {
-      console.warn('NEXT_PUBLIC_ABLY_API_KEY not found. Multiplayer will not work.');
-      return null;
-    }
-    
-    // Generate stable clientId (persisted in sessionStorage)
-    let clientIdToUse: string | null = null;
-    try {
-      clientIdToUse = window.sessionStorage.getItem('ablyClientId');
-      if (!clientIdToUse) {
-        clientIdToUse = `player-${Math.random().toString(36).substr(2, 9)}`;
-        window.sessionStorage.setItem('ablyClientId', clientIdToUse);
-      }
-    } catch (err) {
-      console.warn('Could not access sessionStorage, using random clientId');
-      clientIdToUse = `player-${Math.random().toString(36).substr(2, 9)}`;
-    }
+    const clientId = `player-${crypto.randomUUID()}`;
 
     const options: Ably.ClientOptions = {
-      key,
+      authUrl: gamePath('/api/multiplayer-token/'),
+      authParams: { clientId },
+      clientId,
       closeOnUnload: true,
       echoMessages: false, // Don't receive our own messages
-      autoConnect: true,
-      ...(clientIdToUse ? { clientId: clientIdToUse } : {}),
+      autoConnect: false,
     };
 
     const client = new Ably.Realtime(options);

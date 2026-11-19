@@ -6,6 +6,7 @@ import { useAbly } from './AblyContext';
 import { safeChannelPublish, safeChannelSubscribe, cleanupChannelSubscriptions } from '../utils/ablyHelpers';
 import type { ConnectedPlayer, MultiplayerState } from '../types/Multiplayer';
 import { getDefaultMap } from '../types/Maps';
+import { STICKFIGURE_CHANNEL_PREFIX } from '../utils/multiplayerAuth.mjs';
 
 interface GameContextType {
   gameState: MultiplayerState;
@@ -22,6 +23,27 @@ interface GameContextType {
 }
 
 const GameContext = createContext<GameContextType | null>(null);
+
+function connectMultiplayer(client: Ably.Realtime): Promise<void> {
+  const connection = client.connection;
+  if (connection.state === 'connected') return Promise.resolve();
+
+  return new Promise((resolve, reject) => {
+    const finish = (error?: Error) => {
+      clearTimeout(timeout);
+      connection.off('connected', onConnected);
+      connection.off('failed', onFailed);
+      if (error) reject(error);
+      else resolve();
+    };
+    const onConnected = () => finish();
+    const onFailed = () => finish(new Error('Multiplayer connection failed'));
+    const timeout = setTimeout(() => finish(new Error('Multiplayer connection timed out')), 10000);
+    connection.on('connected', onConnected);
+    connection.on('failed', onFailed);
+    client.connect();
+  });
+}
 
 const debugLog = (...args: unknown[]) => {
   try {
@@ -65,7 +87,8 @@ export function GameProvider({ children }: GameProviderProps) {
       console.warn('Ably client not initialized');
       return null;
     }
-    return ably.channels.get(sessionId);
+    if (!/^pvp-[a-z0-9]{9}$/.test(sessionId)) return null;
+    return ably.channels.get(`${STICKFIGURE_CHANNEL_PREFIX}:${sessionId}`);
   }, [ably]);
 
   /**
@@ -78,18 +101,10 @@ export function GameProvider({ children }: GameProviderProps) {
     }
 
     try {
-      // Wait for connection
-      if (ably.connection.state !== 'connected') {
-        debugLog('Waiting for Ably connection...');
-        await new Promise<void>((resolve) => {
-          ably.connection.once('connected', () => resolve());
-          // Timeout after 5 seconds
-          setTimeout(() => resolve(), 5000);
-        });
-      }
+      await connectMultiplayer(ably);
 
       // Generate unique session ID
-      const sessionId = `pvp-${Math.random().toString(36).substr(2, 9)}`;
+      const sessionId = `pvp-${crypto.randomUUID().replace(/-/g, '').slice(0, 9)}`;
       const channel = getChannel(sessionId);
       
       if (!channel) {
@@ -98,6 +113,7 @@ export function GameProvider({ children }: GameProviderProps) {
       }
 
       const clientId = ably.auth.clientId || 'host';
+      await channel.presence.enter({ username });
 
       // Update state first - start in waiting phase before map selection
       setGameState(prev => ({
@@ -111,9 +127,6 @@ export function GameProvider({ children }: GameProviderProps) {
         username,
         intendedGameMode: 'PvP',
       }));
-
-      // Enter presence
-      await channel.presence.enter({ username });
 
       // Subscribe to presence events
       channel.presence.subscribe('enter', (member: Ably.PresenceMessage) => {
@@ -215,21 +228,14 @@ export function GameProvider({ children }: GameProviderProps) {
     }
 
     try {
-      // Wait for connection
-      if (ably.connection.state !== 'connected') {
-        debugLog('Waiting for Ably connection...');
-        await new Promise<void>((resolve) => {
-          ably.connection.once('connected', () => resolve());
-          setTimeout(() => resolve(), 5000);
-        });
-      }
-
       const channel = getChannel(sessionId);
       
       if (!channel) {
         console.error('Failed to get channel');
         return false;
       }
+
+      await connectMultiplayer(ably);
 
       // Check if lobby exists (verify presence)
       const members = await channel.presence.get();
@@ -264,9 +270,6 @@ export function GameProvider({ children }: GameProviderProps) {
         username,
         intendedGameMode: 'PvP',
       }));
-
-      // Enter presence
-      await channel.presence.enter({ username });
 
       // Subscribe to player joined events
       safeChannelSubscribe(channel, 'playerJoined', (message: any) => {
@@ -346,6 +349,26 @@ export function GameProvider({ children }: GameProviderProps) {
         });
       });
 
+      try {
+        await channel.presence.enter({ username });
+      } catch (error) {
+        channel.unsubscribe();
+        channel.presence.unsubscribe();
+        await channel.detach().catch(() => undefined);
+        setGameState(prev => ({
+          ...prev,
+          isMultiplayerGame: false,
+          multiplayerSessionId: null,
+          lobbyPhase: null,
+          connectedPlayers: [],
+          ablyChannelRef: null,
+          username: '',
+          intendedGameMode: 'Infinite',
+          selectedMapId: getDefaultMap().id,
+        }));
+        throw error;
+      }
+
       debugLog('Joined lobby:', sessionId);
       return true;
     } catch (error) {
@@ -367,6 +390,7 @@ export function GameProvider({ children }: GameProviderProps) {
         
         // Cleanup subscriptions
         cleanupChannelSubscriptions(channel, ['playerJoined', 'gameStart', 'playerSync', 'playerAttack', 'playerHit', 'mapSelected', 'phaseChange', 'playerReady']);
+        channel.presence.unsubscribe();
         
         // Detach channel
         await channel.detach();

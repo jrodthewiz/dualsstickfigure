@@ -1,6 +1,8 @@
 node_modules/
 .next/
 out/
+build/
+*.tsbuildinfo
 __out_tmp/
 .vercel/
 .vscode/

@@ -13,6 +13,7 @@ import type { EnemyAttackName } from "./game/ai/stateMachine";
 import { useGameContext } from "./context/GameContext";
 import { useAbly } from "./context/AblyContext";
 import { safeChannelPublish, safeChannelSubscribe } from "./utils/ablyHelpers";
+import { gamePath, getInvitedRoom } from "./utils/gamePath";
 import type { RemotePlayer } from "./types/Multiplayer";
 import { AVAILABLE_MAPS, getMapById } from "./types/Maps";
 import type { MapConfig, RooftopPlatformData, RooftopBuildingDefinition, RooftopFeatureDefinition, RooftopBuildingStyle } from "./types/Maps";
@@ -466,7 +467,7 @@ const getStickmanFrameUrl = (key: string, def: StickmanAnimDef, frameIndex: numb
   const frameId = framePad === 2 ? frameIndex.toString().padStart(2, '0') : frameIndex.toString();
   const soundSuffix = override?.soundFrames?.includes(frameIndex) ? '_play_sound' : '';
 
-  return `${def.path}/${baseName}${animName}_${frameId}${soundSuffix}.png`.replace(/ /g, '%20');
+  return gamePath(`${def.path}/${baseName}${animName}_${frameId}${soundSuffix}.png`.replace(/ /g, '%20'));
 };
 
 const globalClips = {
@@ -1380,8 +1381,9 @@ useEffect(() => {
   const gameConfigRef = useRef({ difficulty: 'Normal' as 'Easy'|'Normal'|'Hard', mode: 'Infinite' as 'Infinite'|'PvP' });
   const currentMapRef = useRef(AVAILABLE_MAPS[0]);
 
-  // Auto-create lobby on mount so players can join immediately (only once)
+  // Visitors without an invite get a room they can share from the main menu.
   React.useEffect(() => {
+    if (getInvitedRoom(new URLSearchParams(window.location.search))) return;
     let cancelled = false;
 
     async function ensureLobby() {
@@ -1544,7 +1546,7 @@ const BULLET_IMPACT_PROFILES: Record<string, BulletImpactProfile> = {
   useEffect(() => {
     const loadSettings = async () => {
       try {
-        const response = await fetch('/collision-settings.json?t=' + Date.now()); // Cache busting
+        const response = await fetch(gamePath('/collision-settings.json?t=' + Date.now())); // Cache busting
         if (!response.ok) {
           console.warn('Collision settings file not found, using defaults');
           return;
@@ -1565,7 +1567,7 @@ const BULLET_IMPACT_PROFILES: Record<string, BulletImpactProfile> = {
     console.log('Saving collision settings:', collisionSettingsRef.current);
     
     try {
-      const response = await fetch('/api/save-collision-settings', {
+      const response = await fetch(gamePath('/api/save-collision-settings/'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(collisionSettingsRef.current)
@@ -1862,7 +1864,7 @@ const BULLET_IMPACT_PROFILES: Record<string, BulletImpactProfile> = {
       // Load all weapon audio files
       const loadAudioFile = async (filename: string, bufferName: string) => {
         try {
-          const audioPath = `/models/Stickfigure%20Player/audio/${filename}`;
+          const audioPath = gamePath(`/models/Stickfigure%20Player/audio/${filename}`);
           console.log(`[Audio] Loading ${bufferName} from:`, audioPath);
           const response = await fetch(audioPath);
           if (!response.ok) {
@@ -11382,7 +11384,7 @@ const BULLET_IMPACT_PROFILES: Record<string, BulletImpactProfile> = {
     } else {
       setDialogMessage({ 
         title: 'Connection Error', 
-        message: 'Failed to create lobby. Make sure Ably is configured.', 
+        message: 'Could not connect to multiplayer. Please try again.',
         type: 'error' 
       });
     }
@@ -11401,6 +11403,20 @@ const BULLET_IMPACT_PROFILES: Record<string, BulletImpactProfile> = {
       });
     }
   }, [gameContext]);
+
+  const attemptedInviteRef = useRef(false);
+  useEffect(() => {
+    if (attemptedInviteRef.current || gameContext.gameState.isMultiplayerGame) return;
+
+    const params = new URLSearchParams(window.location.search);
+    const targetSession = getInvitedRoom(params);
+    if (!targetSession) return;
+
+    attemptedInviteRef.current = true;
+    const guestName = params.get('name')?.trim() || params.get('username')?.trim()
+      || `Player-${Math.floor(1000 + Math.random() * 9000)}`;
+    void handleJoinLobby(targetSession, guestName.slice(0, 15)).finally(() => setAutoLobbyReady(true));
+  }, [gameContext.gameState.isMultiplayerGame, handleJoinLobby]);
 
   const handleLeaveLobby = useCallback(async () => {
     await gameContext.leaveLobby();
@@ -11857,7 +11873,7 @@ const BULLET_IMPACT_PROFILES: Record<string, BulletImpactProfile> = {
           
           {/* Fight Image */}
           <img
-            src="/images/fight image main.png"
+            src={gamePath('/images/fight image main.png')}
             alt="Fight"
             style={{
               maxWidth: INTRO_CONFIG.imageMaxWidth,
@@ -12228,6 +12244,21 @@ const BULLET_IMPACT_PROFILES: Record<string, BulletImpactProfile> = {
                         <span style={{ fontSize: 11 }}>Players:</span>
                         <span style={{ fontWeight: 700 }}>{gameContext.gameState.connectedPlayers.length}</span>
                       </div>
+                      <button
+                        onClick={async () => {
+                          const room = gameContext.gameState.multiplayerSessionId;
+                          if (!room) return;
+                          const invite = new URL(gamePath('/'), window.location.origin);
+                          invite.searchParams.set('room', room);
+                          try {
+                            await navigator.clipboard.writeText(invite.href);
+                          } catch {
+                            setDialogMessage({ title: 'Room invite', message: invite.href, type: 'info' });
+                          }
+                        }}
+                      >
+                        Copy invite link
+                      </button>
                       {gameContext.gameState.connectedPlayers.map((player, idx) => (
                         <div key={player.clientId} style={{ 
                           fontSize: 10, 
